@@ -3,6 +3,15 @@
 // can call the tokentrim_retrieve tool to read the original. The client never sees that tool: the
 // proxy answers the call itself, re-asks upstream, and returns one combined assistant turn.
 //
+// Later requests must still show where retrieved facts came from. The proxy remembers each hidden
+// exchange (createMemory) and, when the client replays the turn, expands it back to the exact turns
+// upstream saw (expand), so the model sees its real call and the real tool result, and thinking blocks
+// from every round keep valid signatures. In a live session without this, the model saw facts with no
+// source, concluded it had guessed them, told the user so, and retrieved again.
+// The client's copy of the turn carries a labelled text block per retrieval ("[tokentrim_retrieve call
+// <id> ... returned:]") that names the exchange; if the proxy restarted and forgot it, that block is
+// the fallback, and late thinking blocks are kept out of the client's copy so it is always valid.
+//
 // Thinking blocks are signed over everything before them (preserved thinking). The client will
 // replay the combined turn without the hidden retrieval turns, so thinking blocks produced after a
 // retrieval would no longer match their prefix and are left out of what the client receives.
@@ -65,19 +74,62 @@ function answer(input, store) {
   return { content: `[lines ${from}-${to} of ${n}${more}]\n${lines.slice(from - 1, to).join('\n')}` };
 }
 
+// Adds the hidden turns for the next round; returns the text block that shows the client what was retrieved.
 function followUp(body, assistantContent, calls, store) {
+  const answers = calls.map((c) => answer(c.input, store));
   body.messages.push(
     { role: 'assistant', content: assistantContent },
-    { role: 'user', content: calls.map((c) => ({ type: 'tool_result', tool_use_id: c.id, ...answer(c.input, store) })) },
+    { role: 'user', content: calls.map((c, i) => ({ type: 'tool_result', tool_use_id: c.id, ...answers[i] })) },
   );
+  const text = calls.map((c, i) => `[${TOOL.name} call ${c.id} ${JSON.stringify(c.input)} returned:]\n${answers[i].content}`).join('\n\n');
+  return { type: 'text', text };
+}
+
+// ---------- memory of hidden exchanges ----------
+
+const SHOWN = /^\[tokentrim_retrieve call (\S+) /;
+
+function createMemory(limit = 500) {
+  const map = new Map();
+  return {
+    remember(id, messages) {
+      map.delete(id);
+      map.set(id, messages);
+      if (map.size > limit) map.delete(map.keys().next().value);
+    },
+    get: (id) => map.get(id),
+    get size() {
+      return map.size;
+    },
+  };
+}
+
+// Replaces each replayed combined turn with the hidden turns upstream actually saw. Returns how many.
+function expand(body, memory) {
+  if (!memory || !memory.size || !Array.isArray(body.messages)) return 0;
+  let n = 0;
+  const out = [];
+  for (const m of body.messages) {
+    const shown = m && m.role === 'assistant' && Array.isArray(m.content)
+      && m.content.map((b) => b && b.type === 'text' && SHOWN.exec(b.text || '')).find(Boolean);
+    const hidden = shown && memory.get(shown[1]);
+    if (hidden) {
+      out.push(...JSON.parse(JSON.stringify(hidden)));
+      n++;
+    } else out.push(m);
+  }
+  if (n) body.messages = out;
+  return n;
 }
 
 // ---------- non-streaming ----------
 
 // post(body) -> fetch Response. first: the Response to the original request.
 // Returns { status, json } or, when upstream failed, { status, text }.
-async function complete(post, body, store, first) {
+async function complete(post, body, store, first, memory) {
   let resp = first;
+  const start = body.messages.length;
+  let firstCall = null;
   const kept = [];
   let rounds = 0;
   let outputTokens = 0;
@@ -89,11 +141,14 @@ async function complete(post, body, store, first) {
     const calls = content.filter(isRetrieveCall);
     for (const b of content) if (!isRetrieveCall(b) && !(rounds > 0 && isThinking(b))) kept.push(b);
     if (calls.length && !content.some(isOtherToolUse) && msg.stop_reason === 'tool_use' && rounds < MAX_ROUNDS) {
-      followUp(body, content, calls, store);
+      firstCall = firstCall || calls[0].id;
+      kept.push(followUp(body, content, calls, store));
       rounds++;
       resp = await post(body);
       continue;
     }
+    // Calls left unanswered (mixed with client tools, or past MAX_ROUNDS) must not be replayed without a result.
+    if (firstCall && memory) memory.remember(firstCall, [...body.messages.slice(start), { role: 'assistant', content: content.filter((b) => !isRetrieveCall(b)) }]);
     const out = { ...msg, content: kept };
     if (msg.usage) out.usage = { ...msg.usage, output_tokens: outputTokens };
     // The model's retrieval calls are not the client's business: if only those were cut, the turn ended.
@@ -147,8 +202,10 @@ const DELTAS = {
 
 // Streams upstream events to the client while it rebuilds each upstream message, so a retrieval call
 // can be answered and the follow-up's blocks appended to the same client message (indexes renumbered).
-async function stream(post, body, store, first, write) {
+async function stream(post, body, store, first, write, memory) {
   let resp = first;
+  const start = body.messages.length;
+  let firstCall = null;
   let rounds = 0;
   let next = 0; // next content block index on the client side
   for (;;) {
@@ -203,7 +260,12 @@ async function stream(post, body, store, first, write) {
     const calls = content.filter(isRetrieveCall);
     const stop = delta && delta.delta && delta.delta.stop_reason;
     if (calls.length && !content.some(isOtherToolUse) && stop === 'tool_use' && rounds < MAX_ROUNDS && !unsafe) {
-      followUp(body, content, calls, store);
+      firstCall = firstCall || calls[0].id;
+      const shown = followUp(body, content, calls, store);
+      const index = next++;
+      write(sse('content_block_start', { type: 'content_block_start', index, content_block: { type: 'text', text: '' } }));
+      write(sse('content_block_delta', { type: 'content_block_delta', index, delta: { type: 'text_delta', text: shown.text } }));
+      write(sse('content_block_stop', { type: 'content_block_stop', index }));
       rounds++;
       resp = await post(body);
       if (!resp.ok) {
@@ -213,6 +275,8 @@ async function stream(post, body, store, first, write) {
       }
       continue;
     }
+    // Calls left unanswered (mixed with client tools, or past MAX_ROUNDS) must not be replayed without a result.
+    if (firstCall && memory) memory.remember(firstCall, [...body.messages.slice(start), { role: 'assistant', content: content.filter((b) => !isRetrieveCall(b)) }]);
     if (delta) {
       if (calls.length && stop === 'tool_use' && !forwardedToolUse) delta = { ...delta, delta: { ...delta.delta, stop_reason: 'end_turn' } };
       write(sse('message_delta', delta));
@@ -241,4 +305,4 @@ function allowEditedHistory(body, headers) {
   return true;
 }
 
-module.exports = { TOOL, addTool, answer, complete, stream, sseEvents, allowEditedHistory, MAX_ROUNDS };
+module.exports = { TOOL, addTool, answer, complete, stream, sseEvents, allowEditedHistory, createMemory, expand, MAX_ROUNDS };

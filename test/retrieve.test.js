@@ -74,6 +74,11 @@ const T1 = { type: 'thinking', thinking: 'need the omitted lines', signature: 's
 const T2 = { type: 'thinking', thinking: 'found it', signature: 'sig-2' };
 const CALL = { type: 'tool_use', id: 'r1', name: 'tokentrim_retrieve', input: { id: ID, from_line: 200, to_line: 202 } };
 const ANSWER = { type: 'text', text: 'Step 200 compiled module_1400.js.' };
+// What the client sees in place of the hidden call: the source of the facts stays in its history.
+const SHOWN = {
+  type: 'text',
+  text: `[tokentrim_retrieve call r1 ${JSON.stringify(CALL.input)} returned:]\n[lines 200-202 of 400; call again with from_line=203 for more]\n${BIG.split('\n').slice(199, 202).join('\n')}`,
+};
 const SCRIPT = [
   { content: [T1, CALL], stop_reason: 'tool_use', usage: { input_tokens: 900, output_tokens: 40 } },
   { content: [T2, ANSWER], stop_reason: 'end_turn', usage: { input_tokens: 1000, output_tokens: 20 } },
@@ -116,7 +121,7 @@ test('retrieval (non-streaming): the proxy answers the call and returns one clea
     const msg = await res.json();
     checkUpstream(seen);
     // T1 keeps its exact prefix; T2 was produced after hidden turns, so it is left out.
-    assert.deepStrictEqual(msg.content, [T1, ANSWER]);
+    assert.deepStrictEqual(msg.content, [T1, SHOWN, ANSWER]);
     assert.strictEqual(msg.stop_reason, 'end_turn');
     assert.strictEqual(msg.usage.output_tokens, 60, 'output tokens of both rounds');
     assert.strictEqual(stats.retrievals, 1);
@@ -147,12 +152,39 @@ test('retrieval (streaming): follow-up blocks are stitched into the same message
     const res = await post(port, conversation(true));
     const out = rebuild(await res.text());
     checkUpstream(seen);
-    assert.deepStrictEqual(out.indexes, [0, 1], 'contiguous indexes, retrieval call and late thinking hidden');
-    assert.deepStrictEqual(out.content, [T1, ANSWER]);
+    assert.deepStrictEqual(out.indexes, [0, 1, 2], 'contiguous indexes, retrieval call and late thinking hidden');
+    assert.deepStrictEqual(out.content, [T1, SHOWN, ANSWER]);
     assert.strictEqual(out.stop, 'end_turn');
     assert.strictEqual(out.starts, 1);
     assert.strictEqual(out.stops, 1);
   });
+});
+
+test('retrieval: a replayed turn is expanded back to the exact turns upstream saw, late thinking included', async () => {
+  for (const stream of [false, true]) {
+    const third = { content: [{ type: 'text', text: 'ok' }], stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 } };
+    await withProxy([...SCRIPT, third], async (port, seen) => {
+      const first = conversation(stream);
+      const res = await post(port, first);
+      const turn = stream ? rebuild(await res.text()).content : (await res.json()).content;
+      // The client replays its copy of the turn and asks a follow-up question.
+      const second = { ...conversation(false), messages: [...first.messages, { role: 'assistant', content: turn }, { role: 'user', content: 'thanks' }] };
+      await (await post(port, second)).json();
+      assert.strictEqual(seen.length, 3);
+      const sent = seen[2].body.messages;
+      // Everything upstream saw in round 2, then the real final turn (with T2), then the new question.
+      assert.deepStrictEqual(sent.slice(0, -2), seen[1].body.messages);
+      assert.deepStrictEqual(sent[sent.length - 2], { role: 'assistant', content: [T2, ANSWER] });
+      assert.deepStrictEqual(sent[sent.length - 1], { role: 'user', content: 'thanks' });
+    });
+  }
+});
+
+test('retrieval: without the proxy memory (restart), the replayed turn is sent as the client has it', async () => {
+  const body = { ...conversation(false), messages: [...conversation(false).messages, { role: 'assistant', content: [T1, SHOWN, ANSWER] }, { role: 'user', content: 'thanks' }] };
+  const copy = JSON.parse(JSON.stringify(body));
+  assert.strictEqual(retrieve.expand(copy, retrieve.createMemory()), 0);
+  assert.deepStrictEqual(copy, body);
 });
 
 test('retrieval: a call mixed with client tools is dropped, the client tools go through, no follow-up', async () => {

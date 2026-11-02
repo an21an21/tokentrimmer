@@ -25,6 +25,8 @@ const DEFAULT_EXCLUDE_TOOLS = [
 
 function isExcluded(ctx, name) {
   if (!name) return false;
+  // Text the model retrieved on purpose is never shortened again.
+  if (name === formats.RETRIEVE_TOOL) return true;
   const last = String(name).toLowerCase().split('__').pop();
   return ctx.exclude.has(last) || ctx.exclude.has(String(name).toLowerCase());
 }

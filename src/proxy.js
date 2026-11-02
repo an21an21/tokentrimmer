@@ -45,6 +45,9 @@ function createServer(config = {}) {
     recent: [],
   };
 
+  // Hidden retrieval exchanges, so replayed turns can be expanded back to what upstream saw.
+  const memory = retrieve.createMemory();
+
   const dashboard = fs.readFileSync(path.join(__dirname, 'dashboard.html'), 'utf8');
 
   function readBody(req) {
@@ -117,6 +120,7 @@ function createServer(config = {}) {
       status: 0,
       reportedInput: null,
       retrievals: 0,
+      dropBlock: false,
       ms: 0,
     };
 
@@ -133,6 +137,7 @@ function createServer(config = {}) {
         const mode = MODES.includes(req.headers['x-tokentrim-mode']) ? req.headers['x-tokentrim-mode'] : cfg.mode;
         const dry = req.headers['x-tokentrim-dry-run'] ? req.headers['x-tokentrim-dry-run'] === '1' : cfg.dryRun;
         const body = JSON.parse(raw.toString('utf8'));
+        if (cfg.retrieve && format === 'anthropic' && !dry) entry.expanded = retrieve.expand(body, memory);
         const opts = {
           mode, keepRecent: cfg.keepRecent, maxToolChars: cfg.maxToolChars, excludeTools: cfg.excludeTools,
           staleAfter: cfg.staleAfter, staleChars: cfg.staleChars, staleStep: cfg.staleStep,
@@ -165,7 +170,7 @@ function createServer(config = {}) {
         // Moving the stale cutoff rewrites old turns: let the API drop the thinking blocks that no
         // longer match instead of rejecting the request (accounts enforced on preserved thinking).
         if (send && r.changed && format === 'anthropic' && cfg.staleAfter && mode !== 'safe' && url.pathname === '/v1/messages') {
-          retrieve.allowEditedHistory(send, headers);
+          entry.dropBlock = retrieve.allowEditedHistory(send, headers);
         }
         if (send) raw = Buffer.from(JSON.stringify(send));
         stats.requests++;
@@ -208,10 +213,10 @@ function createServer(config = {}) {
       let rounds = 0;
       if (streaming) {
         res.writeHead(up.status, outHeaders);
-        rounds = await retrieve.stream(post, loop.body, loop.store, up, (s) => res.write(s));
+        rounds = await retrieve.stream(post, loop.body, loop.store, up, (s) => res.write(s), memory);
         res.end();
       } else {
-        const out = await retrieve.complete(post, loop.body, loop.store, up);
+        const out = await retrieve.complete(post, loop.body, loop.store, up, memory);
         rounds = out.rounds;
         res.writeHead(out.status, outHeaders);
         res.end(out.json ? JSON.stringify(out.json) : out.text);

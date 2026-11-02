@@ -147,8 +147,12 @@ Current Claude models sign each thinking block over the system prompt, the tool 
 and reject (or, if the request opts in, drop) a block whose history changed. tokentrim is built around that:
 
 - Rewrites are append-only: a message is compressed the same way on every request, so old blocks stay valid.
-- Retrieval keeps the thinking from the model's first response, which still matches its history, and leaves out
-  thinking produced after a hidden retrieval turn, since the client will replay the turn without it.
+- Retrieval runs as hidden turns between the proxy and the API. The client gets one assistant turn with a
+  labelled `[tokentrim_retrieve call … returned:]` block per retrieval. When the client sends that turn back, the
+  proxy restores the hidden turns exactly as the API saw them, so the model sees its real call and result and
+  every thinking block stays valid. (Without this, in a live test the model saw facts with no source in its
+  history, told the user it had guessed them, and retrieved again.) The proxy keeps the last 500 exchanges in
+  memory; after a restart the client's copy is sent as is, with the late thinking blocks already left out.
 - Moving the stale cutoff does rewrite old messages. On those requests, if the history contains thinking blocks
   and thinking is adaptive, tokentrim sets `thinking.block_binding.prefix_mismatch_behavior: "drop_block"` with the
   `thinking-binding-controls-2026-08-01` beta header, so mismatched blocks are dropped instead of failing the request.
