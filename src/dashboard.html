@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tokentrim</title>
+<style>
+:root {
+  --bg: #f6f7f5; --surface: #ffffff; --fg: #17201b; --muted: #5d6a62; --line: #dfe4df;
+  --accent: #0f7a55; --accent-soft: #dcf1e8; --warn: #a15c00; --bar: #cfd8d2;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1512; --surface: #161e19; --fg: #e6ede8; --muted: #8fa097; --line: #26322b;
+    --accent: #3ccf94; --accent-soft: #123826; --warn: #e2a64a; --bar: #2a3830; color-scheme: dark;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.5 var(--sans); }
+.wrap { max-width: 980px; margin: 0 auto; padding: 24px 16px 48px; }
+header { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: baseline; justify-content: space-between; margin-bottom: 20px; }
+h1 { font: 600 20px/1.2 var(--mono); margin: 0; letter-spacing: -0.02em; }
+.sub { color: var(--muted); font-size: 13px; }
+.pill { font: 12px var(--mono); padding: 2px 8px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); }
+.pill.dry { background: transparent; color: var(--warn); border: 1px solid var(--warn); }
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; margin-bottom: 20px; }
+.kpi { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 14px 16px; }
+.kpi .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; }
+.kpi .value { font: 600 28px/1.2 var(--mono); font-variant-numeric: tabular-nums; margin-top: 4px; }
+.kpi.main .value { color: var(--accent); }
+section { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 16px; margin-bottom: 16px; }
+h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin: 0 0 12px; font-weight: 600; }
+.tech { display: grid; grid-template-columns: minmax(120px, 190px) 1fr 56px; gap: 6px 12px; align-items: center; font: 13px var(--mono); }
+.tech .bar { height: 8px; background: var(--bar); border-radius: 2px; overflow: hidden; }
+.tech .bar i { display: block; height: 100%; background: var(--accent); }
+.tech .n { text-align: right; font-variant-numeric: tabular-nums; }
+.scroll { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font: 13px var(--mono); min-width: 760px; }
+th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; font-variant-numeric: tabular-nums; }
+th { color: var(--muted); font-weight: 500; }
+td.num, th.num { text-align: right; }
+td.good { color: var(--accent); }
+td.bad { color: var(--warn); }
+.empty { color: var(--muted); padding: 8px 0; }
+code { font-family: var(--mono); background: var(--accent-soft); padding: 1px 5px; border-radius: 3px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>tokentrim</h1>
+    <div class="sub"><span id="modepill" class="pill">balanced</span> <span id="uptime"></span></div>
+  </header>
+
+  <div class="kpis">
+    <div class="kpi main"><div class="label">Tokens saved</div><div class="value" id="saved">0</div></div>
+    <div class="kpi"><div class="label">Reduction</div><div class="value" id="pct">0%</div></div>
+    <div class="kpi"><div class="label">Requests</div><div class="value" id="reqs">0</div></div>
+    <div class="kpi"><div class="label">Est. tokens sent</div><div class="value" id="after">0</div></div>
+  </div>
+
+  <section>
+    <h2>Where the savings come from</h2>
+    <div id="tech" class="tech"><div class="empty">No requests yet. Point your SDK at this proxy.</div></div>
+  </section>
+
+  <section>
+    <h2>Recent requests</h2>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Time</th><th>Route</th><th class="num">Before</th><th class="num">After</th><th class="num">Saved</th><th class="num">Billed input</th><th>Check</th><th>Techniques</th></tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+    <p class="sub">Token counts are estimates (about 4 characters per token). "Billed input" is the figure the API reported for the request it received. In dry-run mode, requests are measured but forwarded unchanged. "Check" shows the result of decoding each rewritten request back and comparing it with the original; "lossless" means every change was proven reversible, and a failed check sends your original request.</p>
+  </section>
+
+  <section>
+    <h2>Connect your app</h2>
+    <p class="sub">Anthropic SDK: <code>ANTHROPIC_BASE_URL=http://localhost:8787</code><br>
+    OpenAI SDK: <code>OPENAI_BASE_URL=http://localhost:8787/v1</code><br>
+    Per request: header <code>x-tokentrim-mode: safe|balanced|aggressive</code> or <code>x-tokentrim-dry-run: 1</code></p>
+  </section>
+</div>
+<script>
+const $ = (id) => document.getElementById(id);
+const fmt = (n) => Number(n).toLocaleString();
+async function tick() {
+  try {
+    const s = await (await fetch('/stats')).json();
+    $('saved').textContent = fmt(s.saved);
+    $('after').textContent = fmt(s.after);
+    $('reqs').textContent = fmt(s.requests);
+    $('pct').textContent = (s.before ? Math.round((s.saved / s.before) * 100) : 0) + '%';
+    const pill = $('modepill');
+    pill.textContent = s.config.mode + (s.config.dryRun ? ' · dry run' : '');
+    pill.className = 'pill' + (s.config.dryRun ? ' dry' : '');
+    $('uptime').textContent = 'up ' + Math.floor((Date.now() - s.startedAt) / 60000) + ' min';
+
+    const techs = Object.entries(s.techniques).sort((a, b) => b[1] - a[1]);
+    const max = techs.length ? techs[0][1] : 1;
+    $('tech').innerHTML = techs.length
+      ? techs.map(([k, n]) => `<div>${k}</div><div class="bar"><i style="width:${(n / max) * 100}%"></i></div><div class="n">${n}</div>`).join('')
+      : '<div class="empty">No requests yet. Point your SDK at this proxy.</div>';
+
+    $('rows').innerHTML = s.recent.map((r) => `<tr>
+      <td>${new Date(r.time).toLocaleTimeString()}</td><td>${r.route}${r.dry ? ' (dry)' : ''}</td>
+      <td class="num">${fmt(r.before)}</td><td class="num">${fmt(r.after)}</td>
+      <td class="num good">${r.saved ? '-' + fmt(r.saved) : '0'}</td>
+      <td class="num">${r.reportedInput == null ? '' : fmt(r.reportedInput)}</td>
+      <td class="${r.check && r.check.startsWith('FAILED') ? 'bad' : ''}">${r.check || ''}</td>
+      <td>${r.techniques.join(', ')}</td></tr>`).join('');
+  } catch (e) { /* proxy restarting */ }
+}
+tick(); setInterval(tick, 2000);
+</script>
+</body>
+</html>
