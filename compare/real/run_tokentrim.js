@@ -18,7 +18,10 @@ const CONFIGS = {
   balanced: { mode: 'balanced' },
   aggressive: { mode: 'aggressive' },
   'balanced+stale10': { mode: 'balanced', staleAfter: 10 },
+  // Same, plus retrieval notes; the originals are saved for the accuracy test's retrieval tool.
+  'balanced+stale10+retrieve': { mode: 'balanced', staleAfter: 10, retrieve: true },
 };
+const storeFile = (name) => path.join(OUT, 'store', name.replace(/[^A-Za-z0-9_-]/g, '_') + '.json');
 
 function commonPrefix(a, b) {
   let i = 0;
@@ -54,6 +57,10 @@ const result = cases.map((c) => {
     const r = compressRequest(body, 'anthropic', opts);
     const ms = Number(process.hrtime.bigint() - t0) / 1e6;
     const again = compressRequest(body, 'anthropic', opts);
+    if (cfg.retrieve) {
+      fs.mkdirSync(path.join(OUT, 'store'), { recursive: true });
+      fs.writeFileSync(storeFile(c.name), JSON.stringify(Object.fromEntries(r.store)));
+    }
     const v = verifyRequest(body, r.body, opts);
     row.modes[name] = {
       messages: r.body.messages,

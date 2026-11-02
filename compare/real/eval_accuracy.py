@@ -24,7 +24,9 @@ import argparse, copy, json, os, random, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(HERE, "out")
-CONDITIONS = ["original", "tt safe", "tt aggressive", "tt balanced+stale10", "hr default"]
+CONDITIONS = ["original", "tt safe", "tt aggressive", "tt balanced+stale10", "tt balanced+stale10+retrieve", "hr default"]
+# Conditions whose shortened results can be read back through the tokentrim_retrieve tool (MCP in headless mode).
+RETRIEVE = {"tt balanced+stale10+retrieve"}
 PER_STRATUM = {"uniform": 8, "tt-changed": 8, "hr-changed": 4}
 MIN_LINE = 16
 INSTRUCTIONS = (
@@ -161,14 +163,30 @@ HEADLESS_SYSTEM = ("You answer questions about a recorded conversation transcrip
                    "Use only the transcript. Do not use tools.")
 
 
-def ask_headless(conds_msgs, qs, model, effort, cwd):
-    """One `claude -p` call. Uses the local Claude Code login; returns (answers dict, cost, error)."""
+RETRIEVE_SYSTEM = ("You answer questions about a recorded conversation transcript that is given to you in full. "
+                   "Use only the transcript. Some tool results in it were shortened and end with a note naming an id; "
+                   "the only tool you have, tokentrim_retrieve, returns the original text for such an id.")
+
+
+def store_file(name):
+    import re
+    return os.path.join(OUT, "store", re.sub(r"[^A-Za-z0-9_-]", "_", name) + ".json")
+
+
+def ask_headless(conds_msgs, qs, model, effort, cwd, store=None):
+    """One `claude -p` call. Uses the local Claude Code login; returns (answers dict, cost, error).
+    With store (a saved id -> original map), the retrieval tool is offered through a local MCP server."""
     import subprocess
     prompt = ("<transcript>\n" + render_transcript(conds_msgs) + "\n</transcript>\n\n"
               + question_message(qs)["content"]
               + "\n\nReturn each answer as only the line itself, with no extra words.")
     cmd = ["claude", "-p", "--model", model, "--effort", effort, "--tools", "", "--no-session-persistence",
-           "--system-prompt", HEADLESS_SYSTEM, "--output-format", "json", "--json-schema", json.dumps(SCHEMA)]
+           "--system-prompt", RETRIEVE_SYSTEM if store else HEADLESS_SYSTEM,
+           "--output-format", "json", "--json-schema", json.dumps(SCHEMA)]
+    if store:
+        server = {"command": "node", "args": [os.path.join(HERE, "retrieve_mcp.js"), store]}
+        cmd += ["--strict-mcp-config", "--mcp-config", json.dumps({"mcpServers": {"tt": server}}),
+                "--allowedTools", "mcp__tt__tokentrim_retrieve"]
     p = subprocess.run(cmd, input=prompt, capture_output=True, text=True, cwd=cwd, timeout=1800)
     try:
         d = json.loads(p.stdout)
@@ -186,7 +204,7 @@ def load_conditions():
     out = []
     for c in cases:
         conds = {"original": c["original"]}
-        for m in ("safe", "aggressive", "balanced+stale10"):
+        for m in ("safe", "aggressive", "balanced+stale10", "balanced+stale10+retrieve"):
             conds["tt " + m] = tt[c["name"]]["modes"][m]["messages"]
         conds["hr default"] = headroom.compress(copy.deepcopy(c["original"]), model="claude-sonnet-4-5-20250929").messages
         out.append((c["name"], conds))
@@ -260,7 +278,8 @@ def main():
             if limited.is_set():
                 rec["error"] = "skipped: usage limit reached earlier in this run"
                 return rec
-            got, cost, err = ask_headless(conds[cn], qs, a.model, a.effort, cwd)
+            got, cost, err = ask_headless(conds[cn], qs, a.model, a.effort, cwd,
+                                          store=store_file(name) if cn in RETRIEVE else None)
             if err and "limit" in err.lower():
                 limited.set()
             rec["cost_usd"] = cost

@@ -8,6 +8,7 @@ const path = require('node:path');
 const { compressText, estimateTokens, MODES } = require('./compress');
 const { compressRequest } = require('./messages');
 const { verifyRequest } = require('./verify');
+const retrieve = require('./retrieve');
 
 function createServer(config = {}) {
   const cfg = {
@@ -26,6 +27,9 @@ function createServer(config = {}) {
     staleAfter: config.staleAfter ?? (Number(process.env.TOKENTRIM_STALE_AFTER) || 0),
     staleChars: config.staleChars ?? (Number(process.env.TOKENTRIM_STALE_CHARS) || undefined),
     staleStep: config.staleStep ?? (Number(process.env.TOKENTRIM_STALE_STEP) || undefined),
+    // Opt-in: shortened tool results get a note, and the proxy answers the model's tokentrim_retrieve
+    // calls itself (Anthropic /v1/messages only).
+    retrieve: config.retrieve ?? process.env.TOKENTRIM_RETRIEVE === '1',
     compressRequest: config.compressRequest || compressRequest,
   };
 
@@ -36,6 +40,7 @@ function createServer(config = {}) {
     after: 0,
     saved: 0,
     verifyFailed: 0,
+    retrievals: 0,
     techniques: {},
     recent: [],
   };
@@ -111,8 +116,17 @@ function createServer(config = {}) {
       check: '',
       status: 0,
       reportedInput: null,
+      retrievals: 0,
       ms: 0,
     };
+
+    const headers = {};
+    for (const [k, v] of Object.entries(req.headers)) {
+      if (['host', 'content-length', 'accept-encoding', 'connection'].includes(k) || k.startsWith('x-tokentrim-')) continue;
+      headers[k] = v;
+    }
+    // Set when this request may run the retrieval loop: { body, store }.
+    let loop = null;
 
     if (format && raw.length) {
       try {
@@ -122,6 +136,7 @@ function createServer(config = {}) {
         const opts = {
           mode, keepRecent: cfg.keepRecent, maxToolChars: cfg.maxToolChars, excludeTools: cfg.excludeTools,
           staleAfter: cfg.staleAfter, staleChars: cfg.staleChars, staleStep: cfg.staleStep,
+          retrieve: cfg.retrieve && format === 'anthropic',
         };
         let r = cfg.compressRequest(body, format, opts);
         if (r.changed && cfg.verify) {
@@ -132,7 +147,7 @@ function createServer(config = {}) {
             // A decode check failed: never send a rewrite we cannot prove. Forward the original.
             entry.check = 'FAILED, original sent';
             stats.verifyFailed++;
-            r = { body, before: r.before, after: r.before, techniques: {}, changed: false };
+            r = { body, before: r.before, after: r.before, techniques: {}, changed: false, store: new Map() };
           }
         }
         entry.mode = mode;
@@ -141,7 +156,18 @@ function createServer(config = {}) {
         entry.after = r.after;
         entry.saved = r.before - r.after;
         entry.techniques = Object.keys(r.techniques);
-        if (r.changed && !dry) raw = Buffer.from(JSON.stringify(r.body));
+        let send = r.changed && !dry ? r.body : null;
+        if (opts.retrieve && !dry && req.method === 'POST' && Array.isArray(body.messages)) {
+          send = send || JSON.parse(JSON.stringify(body));
+          retrieve.addTool(send);
+          if (url.pathname === '/v1/messages') loop = { body: send, store: r.store || new Map() };
+        }
+        // Moving the stale cutoff rewrites old turns: let the API drop the thinking blocks that no
+        // longer match instead of rejecting the request (accounts enforced on preserved thinking).
+        if (send && r.changed && format === 'anthropic' && cfg.staleAfter && mode !== 'safe' && url.pathname === '/v1/messages') {
+          retrieve.allowEditedHistory(send, headers);
+        }
+        if (send) raw = Buffer.from(JSON.stringify(send));
         stats.requests++;
         stats.before += r.before;
         stats.after += r.after;
@@ -154,11 +180,6 @@ function createServer(config = {}) {
       }
     }
 
-    const headers = {};
-    for (const [k, v] of Object.entries(req.headers)) {
-      if (['host', 'content-length', 'accept-encoding', 'connection'].includes(k) || k.startsWith('x-tokentrim-')) continue;
-      headers[k] = v;
-    }
     if (raw.length) headers['content-length'] = String(raw.length);
 
     let up;
@@ -178,8 +199,31 @@ function createServer(config = {}) {
     up.headers.forEach((v, k) => {
       if (!['content-encoding', 'content-length', 'transfer-encoding', 'connection'].includes(k)) outHeaders[k] = v;
     });
-    res.writeHead(up.status, outHeaders);
+    if (loop && up.ok) {
+      const post = (b) => {
+        const text = JSON.stringify(b);
+        return fetch(upstream + req.url, { method: 'POST', headers: { ...headers, 'content-length': String(Buffer.byteLength(text)) }, body: text });
+      };
+      const streaming = (up.headers.get('content-type') || '').includes('text/event-stream');
+      let rounds = 0;
+      if (streaming) {
+        res.writeHead(up.status, outHeaders);
+        rounds = await retrieve.stream(post, loop.body, loop.store, up, (s) => res.write(s));
+        res.end();
+      } else {
+        const out = await retrieve.complete(post, loop.body, loop.store, up);
+        rounds = out.rounds;
+        res.writeHead(out.status, outHeaders);
+        res.end(out.json ? JSON.stringify(out.json) : out.text);
+        if (out.json && out.json.usage) entry.reportedInput = out.json.usage.input_tokens ?? null;
+      }
+      entry.retrievals = rounds || 0;
+      stats.retrievals += entry.retrievals;
+      entry.ms = Date.now() - started;
+      return;
+    }
 
+    res.writeHead(up.status, outHeaders);
     let tee = '';
     if (up.body) {
       for await (const chunk of up.body) {

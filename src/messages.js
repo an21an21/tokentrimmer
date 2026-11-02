@@ -1,13 +1,16 @@
 'use strict';
 // Applies the compression engine to Anthropic and OpenAI request bodies.
-// Rules: system prompts are never touched. Tool results get the full treatment.
-// Older plain-text turns only get lossless whitespace cleanup. The newest
-// `keepRecent` messages are left alone except for tool results.
+// Rules: system prompts, tool definitions and plain-text turns are never touched; only tool results are.
+// A message's compressed form depends only on that message and earlier ones (plus the stepped stale
+// cutoff), never on how many messages follow it. That keeps the history append-only, which both prompt
+// caching and thinking-block signatures (preserved thinking) require. Plain-text cleanup of older turns
+// is available with opts.plainText, but it rewrites a turn once it ages past keepRecent: an edit.
 const crypto = require('node:crypto');
 const { compressText, estimateTokens } = require('./compress');
 const formats = require('./formats');
 
 const DEDUPE_MIN_CHARS = 400;
+const LOSSY = new Set(['json-drop-empty', 'log-collapse', 'cap-large-output']);
 // Repeated line blocks: a run must span at least BLOCK_WINDOW lines and BLOCK_MIN_CHARS characters
 // to be worth a reference line.
 const BLOCK_WINDOW = 4;
@@ -32,6 +35,8 @@ function makeContext(opts) {
     opts, exclude, names: new Map(), seen: new Map(), techniques: {}, fieldsChanged: 0, skipped: 0,
     // Repeated-block index: window hash -> first {msg, result, line} where those lines were sent verbatim.
     blocks: new Map(), sources: new Map(), resultCounts: new Map(),
+    // Retrieval: id -> original text of every tool result that lost content (opts.retrieve).
+    store: new Map(),
     blockWindow: opts.blockWindow || BLOCK_WINDOW, blockMinChars: opts.blockMinChars ?? BLOCK_MIN_CHARS,
   };
 }
@@ -149,6 +154,13 @@ function shrinkToolText(text, ctx, msgIndex, excluded, k, stale) {
   } else {
     indexSource(ctx, text, msgIndex, k);
   }
+  if (ctx.opts.retrieve && r.techniques.some((t) => LOSSY.has(t))) {
+    // Content was dropped: keep the original for the retrieval tool and tell the model how to get it.
+    const id = formats.retrieveId(text);
+    ctx.store.set(id, text);
+    note(ctx, ['retrievable']);
+    return r.text + formats.retrieveNote(id);
+  }
   return r.text;
 }
 
@@ -184,7 +196,7 @@ function anthropic(body, ctx) {
   messages.forEach((m, i) => {
     const old = i < recentFrom;
     if (typeof m.content === 'string') {
-      if (old) m.content = shrinkPlainText(m.content, ctx);
+      if (old && ctx.opts.plainText) m.content = shrinkPlainText(m.content, ctx);
       return;
     }
     if (!Array.isArray(m.content)) return;
@@ -192,7 +204,7 @@ function anthropic(body, ctx) {
     for (const block of m.content) {
       if (block.type === 'tool_result') {
         shrinkContent(block, 'content', ctx, i, isExcluded(ctx, ctx.names.get(block.tool_use_id)), counter);
-      } else if (block.type === 'text' && old) {
+      } else if (block.type === 'text' && old && ctx.opts.plainText) {
         block.text = shrinkPlainText(block.text, ctx);
       }
     }
@@ -213,24 +225,25 @@ function openai(body, ctx) {
     if (m.role === 'tool') {
       shrinkContent(m, 'content', ctx, i, isExcluded(ctx, ctx.names.get(m.tool_call_id)), { k: 0 });
     } else if ((m.role === 'user' || m.role === 'assistant') && i < recentFrom) {
-      if (typeof m.content === 'string') m.content = shrinkPlainText(m.content, ctx);
+      if (typeof m.content === 'string' && ctx.opts.plainText) m.content = shrinkPlainText(m.content, ctx);
     }
   });
 }
 
-// Returns { body, before, after, techniques, changed }. Never throws on odd input.
+// Returns { body, before, after, techniques, changed, store }. Never throws on odd input.
+// store maps retrieval ids to original texts (only filled with opts.retrieve).
 function compressRequest(body, format, opts) {
   const beforeText = JSON.stringify(body);
   const before = estimateTokens(beforeText);
   if (!body || !Array.isArray(body.messages)) {
-    return { body, before, after: before, techniques: {}, changed: false };
+    return { body, before, after: before, techniques: {}, changed: false, store: new Map() };
   }
   const clone = JSON.parse(beforeText);
   const ctx = makeContext(opts);
   try {
     (format === 'anthropic' ? anthropic : openai)(clone, ctx);
   } catch {
-    return { body, before, after: before, techniques: {}, changed: false };
+    return { body, before, after: before, techniques: {}, changed: false, store: new Map() };
   }
   const afterText = JSON.stringify(clone);
   // Keep the rewrite only if it is really shorter. Judged on length, not on the estimate.
@@ -242,6 +255,7 @@ function compressRequest(body, format, opts) {
     after,
     techniques: changed ? ctx.techniques : {},
     changed,
+    store: changed ? ctx.store : new Map(),
   };
 }
 

@@ -308,8 +308,31 @@ function decodeBlockRefs(text, getText) {
   return out.join('\n');
 }
 
+// ---------- retrieval notes ----------
+
+// A tool result that lost content (lossy mode) ends with a note naming the id under which the proxy
+// keeps the original for the tokentrim_retrieve tool. The id is a hash of the original text, so the
+// same input always gives the same note (prompt caching stays intact).
+const RETRIEVE_TOOL = 'tokentrim_retrieve';
+const RETRIEVE_NOTE = /\n\[tokentrim: shortened; full text via tokentrim_retrieve \{"id":"([0-9a-f]{12})"\}\]$/;
+
+function retrieveId(text) {
+  return require('node:crypto').createHash('sha1').update(text).digest('hex').slice(0, 12);
+}
+
+function retrieveNote(id) {
+  return `\n[tokentrim: shortened; full text via ${RETRIEVE_TOOL} {"id":"${id}"}]`;
+}
+
+// Returns { text, id } with the note removed, or null when there is none.
+function splitRetrieveNote(text) {
+  const m = RETRIEVE_NOTE.exec(text);
+  return m ? { text: text.slice(0, m.index), id: m[1] } : null;
+}
+
 module.exports = {
   encCell, splitCells, parseCell, encodeTable, encodeGroups, decodeTables, decodeJSONOutput, expand,
   templateLogs, decodeLogTemplates, ungroupGrep, STRIPPED_ROW,
   BLOCK_REF, blockRef, hasBlockRefs, decodeBlockRefs,
+  RETRIEVE_TOOL, retrieveId, retrieveNote, splitRetrieveNote,
 };

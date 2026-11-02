@@ -35,9 +35,12 @@ shows what you would save, but the original request is forwarded unchanged.
 | Drop null / empty JSON fields and all-empty table columns | balanced | no |
 | Collapse runs of similar log lines (first and last kept, count shown) | balanced | no |
 | Cap huge outputs: head and tail kept, middle omitted and labelled | aggressive | no |
-| Opt-in (`TOKENTRIM_STALE_AFTER`): tool results older than about N messages are capped hard (`TOKENTRIM_STALE_CHARS`). The cutoff moves in steps (`TOKENTRIM_STALE_STEP`), so each result changes once and the prompt cache breaks once per step, not every turn. **Experimental:** in the accuracy test below it cut recall of old details to 35% | balanced, aggressive | no |
+| Opt-in (`TOKENTRIM_STALE_AFTER`): tool results older than about N messages are capped hard (`TOKENTRIM_STALE_CHARS`). The cutoff moves in steps (`TOKENTRIM_STALE_STEP`), so each result changes once and the prompt cache breaks once per step, not every turn. **Experimental:** on its own it cut recall of old details to 35% in the accuracy test below; use it with retrieval | balanced, aggressive | no |
+| Opt-in (`TOKENTRIM_RETRIEVE=1`, Anthropic `/v1/messages`): a shortened tool result ends with `[tokentrim: shortened; full text via tokentrim_retrieve {"id":"…"}]`. The proxy adds that tool to every request and answers the model's calls itself, so the client never sees them | any lossy mode | restores content on demand |
 
-Never touched: system prompts, tool definitions, the last 2 messages' plain text.
+Never touched: system prompts, tool definitions, plain-text turns. Only tool results are rewritten, and a
+message's rewritten form never changes as the conversation grows (the stale cutoff is the one exception, below).
+That keeps the history append-only, which prompt caching and Claude's signed thinking blocks both need.
 Tool results are processed, except results from file-content tools (`Read`, `Edit`,
 `Write`, `read_file`, `view`, `str_replace_editor`, `skill`, including MCP-prefixed
 names such as `mcp__fs__read_file`). Those are never rewritten, because edit tools
@@ -59,6 +62,7 @@ prefix stays identical between requests and provider prompt caching keeps workin
 | `TOKENTRIM_STALE_AFTER` | off (e.g. `10`; ignored in safe mode) |
 | `TOKENTRIM_STALE_CHARS` | 1000 |
 | `TOKENTRIM_STALE_STEP` | 20 |
+| `TOKENTRIM_RETRIEVE` | off (`1` to add the retrieval tool; Anthropic only) |
 
 Per request: header `x-tokentrim-mode: safe|balanced|aggressive` and
 `x-tokentrim-dry-run: 1`. These headers are not forwarded upstream.
@@ -136,6 +140,20 @@ How to read this:
   more aggressive profiles. The data is synthetic.
 - Not tested: whether a model reads tokentrim's table and template formats as accurately as
   the original text. Check that on your own tasks before relying on non-trivial savings.
+
+## Thinking blocks
+
+Current Claude models sign each thinking block over the system prompt, the tool list and every earlier message,
+and reject (or, if the request opts in, drop) a block whose history changed. tokentrim is built around that:
+
+- Rewrites are append-only: a message is compressed the same way on every request, so old blocks stay valid.
+- Retrieval keeps the thinking from the model's first response, which still matches its history, and leaves out
+  thinking produced after a hidden retrieval turn, since the client will replay the turn without it.
+- Moving the stale cutoff does rewrite old messages. On those requests, if the history contains thinking blocks
+  and thinking is adaptive, tokentrim sets `thinking.block_binding.prefix_mismatch_behavior: "drop_block"` with the
+  `thinking-binding-controls-2026-08-01` beta header, so mismatched blocks are dropped instead of failing the request.
+- Starting the proxy, or changing its settings, in the middle of a session also changes the history. Start new
+  sessions after changing the setup.
 
 ## Real sessions
 

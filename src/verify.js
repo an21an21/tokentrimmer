@@ -24,6 +24,17 @@ function containsString(node, str) {
 }
 
 function classify(orig, comp, originalBody, compressedBody, opts) {
+  // A retrieval note must name the hash of this exact original, and only follows lossy output.
+  const note = formats.splitRetrieveNote(comp);
+  if (note && !formats.splitRetrieveNote(orig)) {
+    if (note.id !== formats.retrieveId(orig)) {
+      return { status: 'FAILED', techniques: ['retrievable'], reason: 'retrieval id does not match the original text' };
+    }
+    const inner = classify(orig, note.text, originalBody, compressedBody, opts);
+    if (inner.status === 'FAILED') return inner;
+    if (inner.status !== 'lossy') return { status: 'FAILED', techniques: inner.techniques, reason: 'retrieval note on a lossless rewrite' };
+    return { ...inner, techniques: [...inner.techniques, 'retrievable'] };
+  }
   const ref = DEDUPE_REF.exec(comp);
   if (ref) {
     const target = originalBody.messages[Number(ref[1])];
