@@ -181,10 +181,14 @@ after it (exact match), answered by Claude Opus 5.5 through `claude -p` with eac
 | tokentrim safe | 100% | 0 | 0 |
 | tokentrim aggressive | 86% | 18 | 1 |
 | tokentrim balanced + stale 10 | 35% | 89 | 2 |
+| tokentrim balanced + stale 10 + retrieval | 99% | 0 | 1 |
 | Headroom default | 95% | 3 | 4 |
 
 Safe mode matched the original, including answers that had to be found by following a repeated-block reference.
-Stale mode loses most old detail; leave it off unless your sessions never need to look back. Recall of exact lines
+Stale mode alone loses most old detail. With retrieval the model read back what it needed and recovered almost
+all of it, but every retrieval is an extra round trip that re-reads the context: in this test, where most
+questions targeted cut content, stale + retrieval cost about 1.7x as much as sending the original. It pays off
+only when old results are rarely needed again; check with dry run and the dashboard's billed input first. Recall of exact lines
 is a harsh test: it does not show whether a task still succeeds. The sample is small and from one person's work.
 
 ## Limits
