@@ -189,10 +189,11 @@ tokens counted with tiktoken o200k_base, Headroom 0.42.0 in library mode. Saving
 
 | | Final request | Cache-weighted cost, whole session |
 |---|---|---|
-| tokentrim safe | 3.3% | 2.5% |
-| tokentrim aggressive | 10.8% | 9.1% |
-| tokentrim balanced + `TOKENTRIM_STALE_AFTER=10` | 27.4% | 14.5% |
-| Headroom (default, coding, general, agent-90 profiles alike) | 1.0% | 1.0% |
+| tokentrim safe | 3.3% | 2.7% |
+| tokentrim aggressive | 10.8% | 9.2% |
+| tokentrim balanced + `TOKENTRIM_STALE_AFTER=10` | 27.4% | 14.7% |
+| tokentrim balanced + stale 10 + `TOKENTRIM_RETRIEVE=1` | 26.5% | 13.6% (before retrieval round trips) |
+| Headroom library mode (default, coding, general, agent-90 profiles alike) | 1.0% | 1.0% |
 
 Cache-weighted cost replays each session request by request, priced as prompt caching bills it (0.1x for the prefix
 shared with the previous request, 1.25x for the rest). Rewriting old messages re-bills everything after them, which is
@@ -216,6 +217,13 @@ all of it, but every retrieval is an extra round trip that re-reads the context:
 questions targeted cut content, stale + retrieval cost about 1.7x as much as sending the original. It pays off
 only when old results are rarely needed again; check with dry run and the dashboard's billed input first. Recall of exact lines
 is a harsh test: it does not show whether a task still succeeds. The sample is small and from one person's work.
+
+Headroom was run only as a library (`headroom.compress`, version 0.42.0). Its proxy mode, which can let the model
+recover compressed content, was not tested, so the retrieval rows above have no Headroom counterpart. The scripts
+in `compare/` reproduce every number here; corrections are welcome.
+
+tokentrim is not affiliated with or endorsed by the Headroom project; the name is used only to identify the
+software compared.
 
 ## Limits
 
