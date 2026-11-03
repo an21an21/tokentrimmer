@@ -1,11 +1,38 @@
 # TokenTrimmer
 
-A local proxy that sits between your app and the Anthropic or OpenAI API and
-compresses requests before they are sent. Zero dependencies, Node 18+.
+A local proxy that sits between your app (Claude Code, the Anthropic or OpenAI SDK, any agent) and the API,
+and makes each request smaller before it is sent, without changing what the model can read. Zero dependencies,
+Node 18+, runs on your machine.
 
 ```
 your app  ->  TokenTrimmer (127.0.0.1:8787)  ->  api.anthropic.com / api.openai.com
 ```
+
+## What it does
+
+In an agent session, most of the input tokens are tool output: JSON from APIs, command logs, grep results,
+the same file or page fetched twice. The whole conversation is sent again on every turn, so that output is paid
+for over and over. TokenTrimmer rewrites tool results into a shorter form as each request passes through:
+
+- **Lossless by default.** JSON is minified, arrays of objects become compact tables, log lines that share a pattern
+  store the pattern once, grep output is grouped by directory, and a result or block of lines the model already saw
+  earlier becomes a one-line reference to it. Every encoding has a decoder, and a built-in verifier decodes each
+  rewritten result before the request is sent. If any check fails, the original request goes out unchanged.
+- **Only tool results are touched.** System prompts, tool definitions and the conversation text are sent as is.
+  Results from file tools (`Read`, `Edit`, `Write`, …) are left alone too, because edits must match the file
+  text exactly.
+- **Safe with prompt caching and thinking.** A message's compressed form never changes as the conversation
+  grows, so the cached prefix stays byte-identical between requests and Claude's signed thinking blocks stay valid.
+- **More savings if you accept some loss (opt-in).** `balanced` and `aggressive` modes drop empty fields,
+  collapse repeated log lines and cap huge outputs. Stale mode shrinks old tool results hard, and retrieval lets
+  Claude fetch the full text back through a tool when it needs it.
+- **You can see what it does.** A local dashboard shows tokens before and after for every request, and dry-run
+  mode measures savings without changing anything.
+
+What to expect: on real Claude Code sessions, safe mode saved about 3% of input tokens with no loss in answer
+accuracy, and the lossy modes saved 10–27% at a measurable accuracy cost (see [Real sessions](#real-sessions)).
+Savings depend heavily on how much repetitive tool output your sessions have; run dry-run mode first to see
+your own number.
 
 ## Run
 

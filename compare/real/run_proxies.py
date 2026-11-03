@@ -28,8 +28,22 @@ def dumps(x):
     return json.dumps(x, separators=(",", ":"), ensure_ascii=False)
 
 
+def strip_cache_control(x):
+    # cache_control marks where the API caches; it is not part of the cached content, and proxies move it
+    if isinstance(x, dict):
+        return {k: strip_cache_control(v) for k, v in x.items() if k != "cache_control"}
+    if isinstance(x, list):
+        return [strip_cache_control(v) for v in x]
+    return x
+
+
 def sent(body):
-    return {"tools": body.get("tools") or [], "messages": body.get("messages") or []}
+    return strip_cache_control({"tools": body.get("tools") or [], "messages": body.get("messages") or []})
+
+
+def markers(x):
+    s = dumps(x)
+    return s.count("<<ccr:") + s.count("tokentrimmer_retrieve {") + s.count("tokentrim_retrieve {")
 
 
 def tokens(x):
@@ -86,7 +100,7 @@ def main():
             row["proxies"][name] = {
                 "requests": len(bodies), "tokens": tokens(sent(bodies[-1])),
                 "cost": cache_cost([dumps(sent(b)) for b in bodies]), "ms_total": sum(ms), "ms_max": max(ms),
-                "ccr_markers": dumps(bodies[-1]).count("<<ccr:"), "tt_notes": dumps(bodies[-1]).count("tokentrimmer_retrieve {"),
+                "markers": markers(bodies[-1].get("messages") or []) - markers(m),
             }
             print(f"{c['name']:36} {name:28} {pct(row['proxies'][name]['tokens'], row['original']):>7}", flush=True)
         rows.append(row)
@@ -103,10 +117,10 @@ def main():
     B = sum(r["base_cost"] for r in rows)
     lines.append("| **Total, final request** | " + " | ".join(f"**{pct(sum(r['proxies'][n]['tokens'] for r in rows), O)}**" for n in names) + " |")
     lines.append("| **Total, cache-weighted cost** | " + " | ".join(f"**{pct(sum(r['proxies'][n]['cost'] for r in rows), B)}**" for n in names) + " |")
-    lines += ["", "| Proxy | Mean latency per request | Slowest request | Retrieval markers in final requests |", "|---|---:|---:|---:|"]
+    lines += ["", "| Proxy | Mean latency per request | Slowest request | Retrieval markers added (final requests) |", "|---|---:|---:|---:|"]
     for n in names:
         req = sum(r["proxies"][n]["requests"] for r in rows)
-        marks = sum(r["proxies"][n]["ccr_markers"] + r["proxies"][n]["tt_notes"] for r in rows)
+        marks = sum(r["proxies"][n]["markers"] for r in rows)
         lines.append(f"| {n} | {sum(r['proxies'][n]['ms_total'] for r in rows) / req:.0f} ms | {max(r['proxies'][n]['ms_max'] for r in rows):.0f} ms | {marks} |")
     report = "\n".join(lines) + "\n"
     open(os.path.join(OUT, "proxies.md"), "w").write(report)
