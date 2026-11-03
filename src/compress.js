@@ -342,7 +342,7 @@ function capOutput(text, maxChars) {
 
 // Compress one string. Returns { text, techniques }.
 function compressText(input, opts = {}) {
-  const mode = opts.mode || 'balanced';
+  const mode = opts.mode || 'safe';
   const maxChars = opts.maxToolChars || 12000;
   const techniques = [];
   let text = input;

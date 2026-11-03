@@ -26,7 +26,7 @@ Install (not on npm; nothing to `npm install`, there are no dependencies):
 ```
 git clone https://github.com/an21an21/tokentrimmer.git
 cd tokentrimmer
-TOKENTRIMMER_MODE=safe npm start        # leave this running
+npm start        # safe (lossless) mode; leave this running
 ```
 
 **Claude Code**: point it at the proxy in another terminal. This works with both an API key and a
@@ -55,9 +55,9 @@ client = anthropic.Anthropic(base_url="http://127.0.0.1:8787")
 const client = new Anthropic({ baseURL: 'http://127.0.0.1:8787' });
 ```
 
-Which mode: `safe` is lossless and is the one to start with. `balanced` and `aggressive` drop content
-(see the accuracy results below before turning them on for coding work). `TOKENTRIMMER_STALE_AFTER=10
-TOKENTRIMMER_RETRIEVE=1` saves the most on long sessions and lets Claude fetch shortened results back; it
+Which mode: the default, `safe`, is lossless. `balanced` and `aggressive` (`TOKENTRIMMER_MODE=balanced npm start`)
+drop content; see the accuracy results below before turning them on for coding work. `TOKENTRIMMER_MODE=balanced
+TOKENTRIMMER_STALE_AFTER=10 TOKENTRIMMER_RETRIEVE=1` (stale results need a lossy mode) saves the most on long sessions and lets Claude fetch shortened results back; it
 is experimental.
 
 ## What it compresses
@@ -95,7 +95,7 @@ prefix stays identical between requests and provider prompt caching keeps workin
 |---|---|
 | `PORT` | 8787 |
 | `HOST` | 127.0.0.1 (loopback only; see Security) |
-| `TOKENTRIMMER_MODE` | balanced (`safe`, `balanced`, `aggressive`) |
+| `TOKENTRIMMER_MODE` | safe (`safe`, `balanced`, `aggressive`) |
 | `DRY_RUN` | off (`1` to measure only) |
 | `TOKENTRIMMER_VERIFY` | on (`0` to disable the runtime check) |
 | `TOKENTRIMMER_EXCLUDE_TOOLS` | read, read_file, view, edit, multiedit, write, notebookedit, str_replace_editor, skill |

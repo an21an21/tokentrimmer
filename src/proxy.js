@@ -14,7 +14,7 @@ function createServer(config = {}) {
   const cfg = {
     anthropicUpstream: config.anthropicUpstream || process.env.ANTHROPIC_UPSTREAM || 'https://api.anthropic.com',
     openaiUpstream: config.openaiUpstream || process.env.OPENAI_UPSTREAM || 'https://api.openai.com',
-    mode: config.mode || process.env.TOKENTRIMMER_MODE || 'balanced',
+    mode: config.mode || process.env.TOKENTRIMMER_MODE || 'safe',
     dryRun: config.dryRun ?? process.env.DRY_RUN === '1',
     keepRecent: config.keepRecent ?? 2,
     maxToolChars: config.maxToolChars ?? 12000,
