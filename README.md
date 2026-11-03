@@ -19,6 +19,47 @@ npm start
 Start with `DRY_RUN=1 npm start` first. Requests are measured and the dashboard
 shows what you would save, but the original request is forwarded unchanged.
 
+## Use with Claude
+
+Install (not on npm; nothing to `npm install`, there are no dependencies):
+
+```
+git clone https://github.com/an21an21/tokentrimmer.git
+cd tokentrimmer
+TOKENTRIMMER_MODE=safe npm start        # leave this running
+```
+
+**Claude Code**: point it at the proxy in another terminal. This works with both an API key and a
+Claude subscription login; the proxy forwards your auth headers unchanged.
+
+```
+ANTHROPIC_BASE_URL=http://127.0.0.1:8787 claude
+```
+
+To always use it, add the variable to `~/.claude/settings.json` (Claude Code then fails to connect
+whenever the proxy is not running, so remove it if you stop using TokenTrimmer):
+
+```json
+{ "env": { "ANTHROPIC_BASE_URL": "http://127.0.0.1:8787" } }
+```
+
+Open http://127.0.0.1:8787/ to watch the savings per request.
+
+**Anthropic SDK**: set `ANTHROPIC_BASE_URL=http://127.0.0.1:8787` in the environment, or pass it in code:
+
+```python
+client = anthropic.Anthropic(base_url="http://127.0.0.1:8787")
+```
+
+```js
+const client = new Anthropic({ baseURL: 'http://127.0.0.1:8787' });
+```
+
+Which mode: `safe` is lossless and is the one to start with. `balanced` and `aggressive` drop content
+(see the accuracy results below before turning them on for coding work). `TOKENTRIMMER_STALE_AFTER=10
+TOKENTRIMMER_RETRIEVE=1` saves the most on long sessions and lets Claude fetch shortened results back; it
+is experimental.
+
 ## What it compresses
 
 | Technique | Mode | Lossless |
