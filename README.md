@@ -29,23 +29,58 @@ cd tokentrimmer
 npm start        # safe (lossless) mode; leave this running
 ```
 
-**Claude Code**: point it at the proxy in another terminal. This works with both an API key and a
-Claude subscription login; the proxy forwards your auth headers unchanged.
+### Claude Code in the terminal
+
+Works with both an API key and a Claude subscription login; the proxy forwards your auth headers unchanged.
+
+1. Terminal 1, start the proxy and leave it running:
+
+   ```
+   cd tokentrimmer
+   npm start
+   ```
+
+2. Terminal 2, start Claude Code through it (same for `claude -p` and `claude --resume`):
+
+   ```
+   ANTHROPIC_BASE_URL=http://127.0.0.1:8787 claude
+   ```
+
+3. Check that it is working: send a message, then open http://127.0.0.1:8787/ (the dashboard lists every
+   request with tokens before and after) or run `curl -s http://127.0.0.1:8787/stats`.
+   If Claude Code reports a connection error, the proxy is not running.
+
+Choose the mode for one session without restarting the proxy (the header is stripped before the request
+leaves your machine):
 
 ```
-ANTHROPIC_BASE_URL=http://127.0.0.1:8787 claude
+ANTHROPIC_BASE_URL=http://127.0.0.1:8787 ANTHROPIC_CUSTOM_HEADERS="x-tokentrimmer-mode: balanced" claude
 ```
 
-To always use it, add the variable to `~/.claude/settings.json` (Claude Code then fails to connect
-whenever the proxy is not running, so remove it if you stop using TokenTrimmer):
+A shell shortcut that starts the proxy in the background when needed (add to `~/.zshrc` or `~/.bashrc`,
+and change `~/tokentrimmer` to where you cloned it):
+
+```sh
+claude-trim() {
+  curl -sf http://127.0.0.1:8787/health >/dev/null ||
+    (cd ~/tokentrimmer && nohup npm start >/tmp/tokentrimmer.log 2>&1 &)
+  until curl -sf http://127.0.0.1:8787/health >/dev/null; do sleep 0.2; done
+  ANTHROPIC_BASE_URL=http://127.0.0.1:8787 claude "$@"
+}
+```
+
+Then run `claude-trim` instead of `claude`. Stop the background proxy with `lsof -ti tcp:8787 -sTCP:LISTEN | xargs kill`.
+
+To always use it, add the variable to `~/.claude/settings.json` instead. Claude Code then fails to connect
+whenever the proxy is not running, so remove it if you stop using TokenTrimmer:
 
 ```json
 { "env": { "ANTHROPIC_BASE_URL": "http://127.0.0.1:8787" } }
 ```
 
-Open http://127.0.0.1:8787/ to watch the savings per request.
+### Anthropic SDK
 
-**Anthropic SDK**: set `ANTHROPIC_BASE_URL=http://127.0.0.1:8787` in the environment, or pass it in code:
+Set `ANTHROPIC_BASE_URL=http://127.0.0.1:8787` in the environment, or pass it in code:
 
 ```python
 client = anthropic.Anthropic(base_url="http://127.0.0.1:8787")
