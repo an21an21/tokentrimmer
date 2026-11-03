@@ -14,7 +14,7 @@ results = []
 for c in cases:
     row = {"name": c["name"], "original": neutral(c["original"])}
     for mode in ("safe", "balanced", "aggressive"):
-        row["tt_" + mode] = neutral(c["tokentrim"][mode])
+        row["tt_" + mode] = neutral(c["tokentrimmer"][mode])
     for label, kw in (("hr_default", {}), ("hr_protect0", {"protect_recent": 0})):
         signal.alarm(90)
         t = time.time()

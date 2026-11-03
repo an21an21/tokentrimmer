@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>tokentrim</title>
+<title>TokenTrimmer</title>
 <style>
 :root {
   --bg: #f6f7f5; --surface: #ffffff; --fg: #17201b; --muted: #5d6a62; --line: #dfe4df;
@@ -50,7 +50,7 @@ code { font-family: var(--mono); background: var(--accent-soft); padding: 1px 5p
 <body>
 <div class="wrap">
   <header>
-    <h1>tokentrim</h1>
+    <h1>TokenTrimmer</h1>
     <div class="sub"><span id="modepill" class="pill">balanced</span> <span id="uptime"></span></div>
   </header>
 
@@ -81,7 +81,7 @@ code { font-family: var(--mono); background: var(--accent-soft); padding: 1px 5p
     <h2>Connect your app</h2>
     <p class="sub">Anthropic SDK: <code>ANTHROPIC_BASE_URL=http://localhost:8787</code><br>
     OpenAI SDK: <code>OPENAI_BASE_URL=http://localhost:8787/v1</code><br>
-    Per request: header <code>x-tokentrim-mode: safe|balanced|aggressive</code> or <code>x-tokentrim-dry-run: 1</code></p>
+    Per request: header <code>x-tokentrimmer-mode: safe|balanced|aggressive</code> or <code>x-tokentrimmer-dry-run: 1</code></p>
   </section>
 </div>
 <script>

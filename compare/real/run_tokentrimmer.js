@@ -1,11 +1,11 @@
 'use strict';
-// Runs tokentrim over compare/real/out/cases.json in several configurations.
+// Runs tokentrimmer over compare/real/out/cases.json in several configurations.
 // Per case and configuration it records the compressed final request, wall time, determinism (two
 // runs, byte-identical?), the verifier's verdict, and a cache replay: the session is re-sent request
 // by request (one request per user message) and each request is priced as prompt caching bills it,
 // 0.1x for the prefix shared with the previous request and 1.25x for the rest (cache write).
-// Replay sizes are in characters. Writes compare/real/out/tokentrim.json.
-//   node compare/real/run_tokentrim.js
+// Replay sizes are in characters. Writes compare/real/out/tokentrimmer.json.
+//   node compare/real/run_tokentrimmer.js
 const fs = require('node:fs');
 const path = require('node:path');
 const { compressRequest } = require('../../src/messages');
@@ -75,4 +75,4 @@ const result = cases.map((c) => {
   return row;
 });
 
-fs.writeFileSync(path.join(OUT, 'tokentrim.json'), JSON.stringify(result));
+fs.writeFileSync(path.join(OUT, 'tokentrimmer.json'), JSON.stringify(result));

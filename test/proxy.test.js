@@ -104,14 +104,14 @@ test('streaming responses pass through and billed input is captured', async () =
   up.server.close();
 });
 
-test('per-request header overrides mode; x-tokentrim headers are not forwarded', async () => {
+test('per-request header overrides mode; x-tokentrimmer headers are not forwarded', async () => {
   const up = mockUpstream();
   const upPort = await listen(up.server);
   const { server } = createServer({ anthropicUpstream: `http://127.0.0.1:${upPort}`, mode: 'balanced' });
   const port = await listen(server);
 
-  await post(port, '/v1/messages', request(false), { 'x-tokentrim-mode': 'safe' });
-  assert.ok(!('x-tokentrim-mode' in up.seen[0].headers));
+  await post(port, '/v1/messages', request(false), { 'x-tokentrimmer-mode': 'safe' });
+  assert.ok(!('x-tokentrimmer-mode' in up.seen[0].headers));
 
   server.close();
   up.server.close();
@@ -130,7 +130,7 @@ test('dashboard, stats and /compress endpoints respond', async () => {
   const { server } = createServer({});
   const port = await listen(server);
   const dash = await fetch(`http://127.0.0.1:${port}/`);
-  assert.ok((await dash.text()).includes('tokentrim'));
+  assert.ok((await dash.text()).includes('tokentrimmer'));
   const stats = await (await fetch(`http://127.0.0.1:${port}/stats`)).json();
   assert.strictEqual(stats.requests, 0);
   const { text } = await post(port, '/compress', { text: JSON.stringify(users, null, 2), mode: 'safe' });

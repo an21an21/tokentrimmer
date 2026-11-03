@@ -133,7 +133,7 @@ function shrinkToolText(text, ctx, msgIndex, excluded, k, stale) {
     if (ctx.seen.has(hash)) {
       note(ctx, ['dedupe-identical']);
       ctx.fieldsChanged++;
-      return `[tokentrim: identical to the tool result in message ${ctx.seen.get(hash)}]`;
+      return `[tokentrimmer: identical to the tool result in message ${ctx.seen.get(hash)}]`;
     }
     ctx.seen.set(hash, msgIndex);
   }

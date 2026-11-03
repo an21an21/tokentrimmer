@@ -1,8 +1,8 @@
 {
-  "name": "tokentrim",
+  "name": "tokentrimmer",
   "version": "0.1.0",
   "description": "Local proxy that compresses LLM requests (tool output, JSON, logs) before they reach the API.",
-  "bin": { "tokentrim": "src/proxy.js" },
+  "bin": { "tokentrimmer": "src/proxy.js" },
   "scripts": {
     "start": "node src/proxy.js",
     "test": "node --test test/*.test.js",

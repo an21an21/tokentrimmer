@@ -204,7 +204,7 @@ const BLOCK_TOOLS = ['Bash', 'browser_find', 'Read', 'mcp__fs__read_file', 'run_
 function rndLine(r) {
   const t = r();
   if (t < 0.15) return pickFrom(r, NASTY).replace(/[\n\r\u2028]/g, ' ');
-  if (t < 0.2) return pickFrom(r, ['', '[tokentrim: lines 1-5 of the tool result in message 1 repeated here]', '[tokentrim: lines x', '  - generic [ref=e12]:']);
+  if (t < 0.2) return pickFrom(r, ['', '[tokentrimmer: lines 1-5 of the tool result in message 1 repeated here]', '[tokentrimmer: lines x', '  - generic [ref=e12]:']);
   return `  - item ${Math.floor(r() * 1e4)} ${rndString(r)} ${'abcdefghij'.repeat(1 + Math.floor(r() * 4))}`;
 }
 // A conversation whose tool results reuse runs of lines from earlier results, sometimes with an edited line.
@@ -284,7 +284,7 @@ test('repeated line blocks: excluded tools are never rewritten but serve as sour
   const opts = { mode: 'safe', keepRecent: 2 };
   const out = compressRequest(body, 'anthropic', opts).body;
   const bash = out.messages[4].content[0].content;
-  assert.match(bash, /^\$ cat module\.js\n\[tokentrim: lines 1-40 of the tool result in message 2 repeated here\]\ntest 0 passed/);
+  assert.match(bash, /^\$ cat module\.js\n\[tokentrimmer: lines 1-40 of the tool result in message 2 repeated here\]\ntest 0 passed/);
   assert.strictEqual(out.messages[4].content[1].content, `${file}\nextra`, 'an excluded tool result stays verbatim');
   assert.strictEqual(verifyRequest(body, out, opts).lossless, true);
 

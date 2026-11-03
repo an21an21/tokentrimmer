@@ -1,6 +1,6 @@
 'use strict';
 // Retrieval (Anthropic /v1/messages only): when lossy compression shortened a tool result, the model
-// can call the tokentrim_retrieve tool to read the original. The client never sees that tool: the
+// can call the tokentrimmer_retrieve tool to read the original. The client never sees that tool: the
 // proxy answers the call itself, re-asks upstream, and returns one combined assistant turn.
 //
 // Later requests must still show where retrieved facts came from. The proxy remembers each hidden
@@ -8,7 +8,7 @@
 // upstream saw (expand), so the model sees its real call and the real tool result, and thinking blocks
 // from every round keep valid signatures. In a live session without this, the model saw facts with no
 // source, concluded it had guessed them, told the user so, and retrieved again.
-// The client's copy of the turn carries a labelled text block per retrieval ("[tokentrim_retrieve call
+// The client's copy of the turn carries a labelled text block per retrieval ("[tokentrimmer_retrieve call
 // <id> ... returned:]") that names the exchange; if the proxy restarted and forgot it, that block is
 // the fallback, and late thinking blocks are kept out of the client's copy so it is always valid.
 //
@@ -28,7 +28,7 @@ const TOOL = {
   name: formats.RETRIEVE_TOOL,
   description:
     'Returns the original, full text of an earlier tool result that was shortened to save context. ' +
-    'Shortened results end with a note like [tokentrim: shortened; full text via tokentrim_retrieve {"id":"..."}]. ' +
+    'Shortened results end with a note like [tokentrimmer: shortened; full text via tokentrimmer_retrieve {"id":"..."}]. ' +
     'Call this with that id when you need content that was omitted. Use from_line/to_line (1-based) to read part ' +
     'of a long result. Call it on its own, not in the same turn as other tools.',
   input_schema: {
@@ -56,7 +56,7 @@ function answer(input, store) {
   const id = input && typeof input.id === 'string' ? input.id : '';
   const text = store.get(id);
   if (text === undefined) {
-    return { content: `No shortened tool result has id "${id}". Use the id from a [tokentrim: shortened ...] note.`, is_error: true };
+    return { content: `No shortened tool result has id "${id}". Use the id from a [tokentrimmer: shortened ...] note.`, is_error: true };
   }
   const lines = text.split('\n');
   const n = lines.length;
@@ -87,7 +87,7 @@ function followUp(body, assistantContent, calls, store) {
 
 // ---------- memory of hidden exchanges ----------
 
-const SHOWN = /^\[tokentrim_retrieve call (\S+) /;
+const SHOWN = /^\[tokentrimmer_retrieve call (\S+) /;
 
 function createMemory(limit = 500) {
   const map = new Map();
@@ -270,7 +270,7 @@ async function stream(post, body, store, first, write, memory) {
       resp = await post(body);
       if (!resp.ok) {
         const detail = (await resp.text()).slice(0, 300);
-        write(sse('error', { type: 'error', error: { type: 'api_error', message: `tokentrim retrieval follow-up failed (HTTP ${resp.status}): ${detail}` } }));
+        write(sse('error', { type: 'error', error: { type: 'api_error', message: `tokentrimmer retrieval follow-up failed (HTTP ${resp.status}): ${detail}` } }));
         return rounds;
       }
       continue;

@@ -278,11 +278,11 @@ function decodeLogTemplates(text) {
 // A run of lines already shown verbatim in an earlier tool result is replaced by one reference line.
 // `message` is the index in the request's messages array; `result` (1-based) is only written when that
 // message holds more than one tool-result text. Lossless: decodeBlockRefs restores the exact text.
-const BLOCK_REF = /^\[tokentrim: lines (\d+)-(\d+) of (?:tool result (\d+)|the tool result) in message (\d+) repeated here\]$/;
+const BLOCK_REF = /^\[tokentrimmer: lines (\d+)-(\d+) of (?:tool result (\d+)|the tool result) in message (\d+) repeated here\]$/;
 
 function blockRef(from, to, message, result) {
   const where = result ? `tool result ${result}` : 'the tool result';
-  return `[tokentrim: lines ${from}-${to} of ${where} in message ${message} repeated here]`;
+  return `[tokentrimmer: lines ${from}-${to} of ${where} in message ${message} repeated here]`;
 }
 
 function hasBlockRefs(text) {
@@ -311,17 +311,17 @@ function decodeBlockRefs(text, getText) {
 // ---------- retrieval notes ----------
 
 // A tool result that lost content (lossy mode) ends with a note naming the id under which the proxy
-// keeps the original for the tokentrim_retrieve tool. The id is a hash of the original text, so the
+// keeps the original for the tokentrimmer_retrieve tool. The id is a hash of the original text, so the
 // same input always gives the same note (prompt caching stays intact).
-const RETRIEVE_TOOL = 'tokentrim_retrieve';
-const RETRIEVE_NOTE = /\n\[tokentrim: shortened; full text via tokentrim_retrieve \{"id":"([0-9a-f]{12})"\}\]$/;
+const RETRIEVE_TOOL = 'tokentrimmer_retrieve';
+const RETRIEVE_NOTE = /\n\[tokentrimmer: shortened; full text via tokentrimmer_retrieve \{"id":"([0-9a-f]{12})"\}\]$/;
 
 function retrieveId(text) {
   return require('node:crypto').createHash('sha1').update(text).digest('hex').slice(0, 12);
 }
 
 function retrieveNote(id) {
-  return `\n[tokentrim: shortened; full text via ${RETRIEVE_TOOL} {"id":"${id}"}]`;
+  return `\n[tokentrimmer: shortened; full text via ${RETRIEVE_TOOL} {"id":"${id}"}]`;
 }
 
 // Returns { text, id } with the note removed, or null when there is none.

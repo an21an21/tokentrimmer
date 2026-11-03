@@ -1,10 +1,10 @@
-# tokentrim
+# TokenTrimmer
 
 A local proxy that sits between your app and the Anthropic or OpenAI API and
 compresses requests before they are sent. Zero dependencies, Node 18+.
 
 ```
-your app  ->  tokentrim (127.0.0.1:8787)  ->  api.anthropic.com / api.openai.com
+your app  ->  TokenTrimmer (127.0.0.1:8787)  ->  api.anthropic.com / api.openai.com
 ```
 
 ## Run
@@ -31,12 +31,12 @@ shows what you would save, but the original request is forwarded unchanged.
 | Tables nested inside a larger JSON object keep a JSON form (`{"_table":{cols,rows}}`) | safe | yes |
 | grep-style `path/file:line:text` output: each directory written once as an `@ dir/` header | safe | yes |
 | Identical tool results sent again later become a one-line reference | safe | yes |
-| A run of 4+ lines already shown verbatim in an earlier tool result becomes `[tokentrim: lines A-B of the tool result in message M repeated here]` | safe | yes |
+| A run of 4+ lines already shown verbatim in an earlier tool result becomes `[tokentrimmer: lines A-B of the tool result in message M repeated here]` | safe | yes |
 | Drop null / empty JSON fields and all-empty table columns | balanced | no |
 | Collapse runs of similar log lines (first and last kept, count shown) | balanced | no |
 | Cap huge outputs: head and tail kept, middle omitted and labelled | aggressive | no |
-| Opt-in (`TOKENTRIM_STALE_AFTER`): tool results older than about N messages are capped hard (`TOKENTRIM_STALE_CHARS`). The cutoff moves in steps (`TOKENTRIM_STALE_STEP`), so each result changes once and the prompt cache breaks once per step, not every turn. **Experimental:** on its own it cut recall of old details to 35% in the accuracy test below; use it with retrieval | balanced, aggressive | no |
-| Opt-in (`TOKENTRIM_RETRIEVE=1`, Anthropic `/v1/messages`): a shortened tool result ends with `[tokentrim: shortened; full text via tokentrim_retrieve {"id":"…"}]`. The proxy adds that tool to every request and answers the model's calls itself, so the client never sees them | any lossy mode | restores content on demand |
+| Opt-in (`TOKENTRIMMER_STALE_AFTER`): tool results older than about N messages are capped hard (`TOKENTRIMMER_STALE_CHARS`). The cutoff moves in steps (`TOKENTRIMMER_STALE_STEP`), so each result changes once and the prompt cache breaks once per step, not every turn. **Experimental:** on its own it cut recall of old details to 35% in the accuracy test below; use it with retrieval | balanced, aggressive | no |
+| Opt-in (`TOKENTRIMMER_RETRIEVE=1`, Anthropic `/v1/messages`): a shortened tool result ends with `[tokentrimmer: shortened; full text via tokentrimmer_retrieve {"id":"…"}]`. The proxy adds that tool to every request and answers the model's calls itself, so the client never sees them | any lossy mode | restores content on demand |
 
 Never touched: system prompts, tool definitions, plain-text turns. Only tool results are rewritten, and a
 message's rewritten form never changes as the conversation grows (the stale cutoff is the one exception, below).
@@ -45,7 +45,7 @@ Tool results are processed, except results from file-content tools (`Read`, `Edi
 `Write`, `read_file`, `view`, `str_replace_editor`, `skill`, including MCP-prefixed
 names such as `mcp__fs__read_file`). Those are never rewritten, because edit tools
 match text verbatim, but an identical repeated result is still replaced by a one-line
-reference. Override the list with `TOKENTRIM_EXCLUDE_TOOLS=name1,name2`. Compression is deterministic, so a repeated
+reference. Override the list with `TOKENTRIMMER_EXCLUDE_TOOLS=name1,name2`. Compression is deterministic, so a repeated
 prefix stays identical between requests and provider prompt caching keeps working.
 
 ## Config
@@ -54,26 +54,26 @@ prefix stays identical between requests and provider prompt caching keeps workin
 |---|---|
 | `PORT` | 8787 |
 | `HOST` | 127.0.0.1 (loopback only; see Security) |
-| `TOKENTRIM_MODE` | balanced (`safe`, `balanced`, `aggressive`) |
+| `TOKENTRIMMER_MODE` | balanced (`safe`, `balanced`, `aggressive`) |
 | `DRY_RUN` | off (`1` to measure only) |
-| `TOKENTRIM_VERIFY` | on (`0` to disable the runtime check) |
-| `TOKENTRIM_EXCLUDE_TOOLS` | read, read_file, view, edit, multiedit, write, notebookedit, str_replace_editor, skill |
+| `TOKENTRIMMER_VERIFY` | on (`0` to disable the runtime check) |
+| `TOKENTRIMMER_EXCLUDE_TOOLS` | read, read_file, view, edit, multiedit, write, notebookedit, str_replace_editor, skill |
 | `ANTHROPIC_UPSTREAM` | https://api.anthropic.com |
 | `OPENAI_UPSTREAM` | https://api.openai.com |
-| `TOKENTRIM_STALE_AFTER` | off (e.g. `10`; ignored in safe mode) |
-| `TOKENTRIM_STALE_CHARS` | 1000 |
-| `TOKENTRIM_STALE_STEP` | 20 |
-| `TOKENTRIM_RETRIEVE` | off (`1` to add the retrieval tool; Anthropic only) |
+| `TOKENTRIMMER_STALE_AFTER` | off (e.g. `10`; ignored in safe mode) |
+| `TOKENTRIMMER_STALE_CHARS` | 1000 |
+| `TOKENTRIMMER_STALE_STEP` | 20 |
+| `TOKENTRIMMER_RETRIEVE` | off (`1` to add the retrieval tool; Anthropic only) |
 
-Per request: header `x-tokentrim-mode: safe|balanced|aggressive` and
-`x-tokentrim-dry-run: 1`. These headers are not forwarded upstream.
+Per request: header `x-tokentrimmer-mode: safe|balanced|aggressive` and
+`x-tokentrimmer-dry-run: 1`. These headers are not forwarded upstream.
 
 `POST /compress` with `{"text": "...", "mode": "balanced"}` returns compressed text
 for use outside the proxy. `GET /stats` returns the numbers the dashboard shows.
 
 ## Security
 
-tokentrim sits between your app and the API, so it sees your API key and every request and response.
+TokenTrimmer sits between your app and the API, so it sees your API key and every request and response.
 What it does with them:
 
 - **Local only by default.** It listens on `127.0.0.1`. The dashboard, `/stats` and the proxy itself have no
@@ -84,7 +84,7 @@ What it does with them:
 - **No disk, no logs, no telemetry.** Nothing is written to disk; the console shows only the startup lines;
   there are no other network calls.
 - **In memory, until restart:** `/stats` keeps the last 50 requests as numbers only (sizes, modes, techniques,
-  status), no content. With `TOKENTRIM_RETRIEVE=1` it also keeps the original text of shortened tool results
+  status), no content. With `TOKENTRIMMER_RETRIEVE=1` it also keeps the original text of shortened tool results
   while answering a request, and the last 500 retrieval exchanges (conversation content) so replayed turns can
   be restored.
 - **No dependencies.** Only Node built-ins, so there is no third-party code in the request path.
@@ -135,11 +135,11 @@ objects and look-alike lines, and decodes every result.
 
 ## Compared with Headroom
 
-Same 8 synthetic payloads run through tokentrim and Headroom 0.42.0 (`headroom.compress`,
+Same 8 synthetic payloads run through TokenTrimmer and Headroom 0.42.0 (`headroom.compress`,
 default settings), one identical counter (about 4 characters per token) over the whole
 message list. Reproduce with `compare/export.js` then `compare/run_headroom.py`.
 
-| Payload | tokentrim safe (lossless) | tokentrim balanced | Headroom |
+| Payload | TokenTrimmer safe (lossless) | TokenTrimmer balanced | Headroom |
 |---|---|---|---|
 | JSON API response, 150 records | 74% | 78% | 72% |
 | Mixed-shape JSON events | 73% | 74% | 73% |
@@ -160,39 +160,39 @@ How to read this:
   dashboard's "billed input" column is the real figure.
 - Headroom was tested with default settings through its library call, not its proxy or its
   more aggressive profiles. The data is synthetic.
-- Not tested: whether a model reads tokentrim's table and template formats as accurately as
+- Not tested: whether a model reads TokenTrimmer's table and template formats as accurately as
   the original text. Check that on your own tasks before relying on non-trivial savings.
 
 ## Thinking blocks
 
 Current Claude models sign each thinking block over the system prompt, the tool list and every earlier message,
-and reject (or, if the request opts in, drop) a block whose history changed. tokentrim is built around that:
+and reject (or, if the request opts in, drop) a block whose history changed. TokenTrimmer is built around that:
 
 - Rewrites are append-only: a message is compressed the same way on every request, so old blocks stay valid.
 - Retrieval runs as hidden turns between the proxy and the API. The client gets one assistant turn with a
-  labelled `[tokentrim_retrieve call … returned:]` block per retrieval. When the client sends that turn back, the
+  labelled `[tokentrimmer_retrieve call … returned:]` block per retrieval. When the client sends that turn back, the
   proxy restores the hidden turns exactly as the API saw them, so the model sees its real call and result and
   every thinking block stays valid. (Without this, in a live test the model saw facts with no source in its
   history, told the user it had guessed them, and retrieved again.) The proxy keeps the last 500 exchanges in
   memory; after a restart the client's copy is sent as is, with the late thinking blocks already left out.
 - Moving the stale cutoff does rewrite old messages. On those requests, if the history contains thinking blocks
-  and thinking is adaptive, tokentrim sets `thinking.block_binding.prefix_mismatch_behavior: "drop_block"` with the
+  and thinking is adaptive, TokenTrimmer sets `thinking.block_binding.prefix_mismatch_behavior: "drop_block"` with the
   `thinking-binding-controls-2026-08-01` beta header, so mismatched blocks are dropped instead of failing the request.
 - Starting the proxy, or changing its settings, in the middle of a session also changes the history. Start new
   sessions after changing the setup.
 
 ## Real sessions
 
-The synthetic numbers above flatter tokentrim: they are the shapes it was built for. `compare/real/` repeats the
+The synthetic numbers above flatter TokenTrimmer: they are the shapes it was built for. `compare/real/` repeats the
 comparison on real Claude Code sessions (9 of the author's own, mostly browser automation and assistant work),
 tokens counted with tiktoken o200k_base, Headroom 0.42.0 in library mode. Savings:
 
 | | Final request | Cache-weighted cost, whole session |
 |---|---|---|
-| tokentrim safe | 3.3% | 2.7% |
-| tokentrim aggressive | 10.8% | 9.2% |
-| tokentrim balanced + `TOKENTRIM_STALE_AFTER=10` | 27.4% | 14.7% |
-| tokentrim balanced + stale 10 + `TOKENTRIM_RETRIEVE=1` | 26.5% | 13.6% (before retrieval round trips) |
+| TokenTrimmer safe | 3.3% | 2.7% |
+| TokenTrimmer aggressive | 10.8% | 9.2% |
+| TokenTrimmer balanced + `TOKENTRIMMER_STALE_AFTER=10` | 27.4% | 14.7% |
+| TokenTrimmer balanced + stale 10 + `TOKENTRIMMER_RETRIEVE=1` | 26.5% | 13.6% (before retrieval round trips) |
 | Headroom library mode (default, coding, general, agent-90 profiles alike) | 1.0% | 1.0% |
 
 Cache-weighted cost replays each session request by request, priced as prompt caching bills it (0.1x for the prefix
@@ -205,10 +205,10 @@ after it (exact match), answered by Claude Opus 5.5 through `claude -p` with eac
 | | Correct | Answered UNKNOWN | Wrong guess |
 |---|---|---|---|
 | original | 100% | 0 | 0 |
-| tokentrim safe | 100% | 0 | 0 |
-| tokentrim aggressive | 86% | 18 | 1 |
-| tokentrim balanced + stale 10 | 35% | 89 | 2 |
-| tokentrim balanced + stale 10 + retrieval | 99% | 0 | 1 |
+| TokenTrimmer safe | 100% | 0 | 0 |
+| TokenTrimmer aggressive | 86% | 18 | 1 |
+| TokenTrimmer balanced + stale 10 | 35% | 89 | 2 |
+| TokenTrimmer balanced + stale 10 + retrieval | 99% | 0 | 1 |
 | Headroom default | 95% | 3 | 4 |
 
 Safe mode matched the original, including answers that had to be found by following a repeated-block reference.
@@ -222,7 +222,7 @@ Headroom was run only as a library (`headroom.compress`, version 0.42.0). Its pr
 recover compressed content, was not tested, so the retrieval rows above have no Headroom counterpart. The scripts
 in `compare/` reproduce every number here; corrections are welcome.
 
-tokentrim is not affiliated with or endorsed by the Headroom project; the name is used only to identify the
+TokenTrimmer is not affiliated with or endorsed by the Headroom project; the name is used only to identify the
 software compared.
 
 ## Limits

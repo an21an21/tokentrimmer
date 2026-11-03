@@ -1,6 +1,6 @@
 'use strict';
 const formats = require('./formats');
-// tokentrim compression engine. Pure functions, no dependencies.
+// tokentrimmer compression engine. Pure functions, no dependencies.
 // Modes:
 //   safe       lossless only (whitespace, ANSI, JSON minify, table-ify, identical-result dedupe)
 //   balanced   safe + drop null/empty JSON fields + collapse repeated log lines
@@ -315,7 +315,7 @@ function capOutput(text, maxChars) {
   const tailBudget = maxChars - headBudget;
   if (lines.length < 10) {
     const cut = text.length - maxChars;
-    return `${text.slice(0, headBudget)}\n... [tokentrim: ${cut} characters omitted from the middle] ...\n${text.slice(text.length - tailBudget)}`;
+    return `${text.slice(0, headBudget)}\n... [tokentrimmer: ${cut} characters omitted from the middle] ...\n${text.slice(text.length - tailBudget)}`;
   }
   const head = [];
   let used = 0;
@@ -335,7 +335,7 @@ function capOutput(text, maxChars) {
   }
   const omitted = t - h + 1;
   if (omitted <= 0) return null;
-  return [...head, `... [tokentrim: ${omitted} lines omitted from the middle] ...`, ...tail].join('\n');
+  return [...head, `... [tokentrimmer: ${omitted} lines omitted from the middle] ...`, ...tail].join('\n');
 }
 
 // ---------- Public API ----------

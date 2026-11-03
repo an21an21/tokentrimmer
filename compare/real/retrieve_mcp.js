@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 'use strict';
-// Minimal stdio MCP server exposing tokentrim_retrieve over a saved store, so the accuracy test can
+// Minimal stdio MCP server exposing tokentrimmer_retrieve over a saved store, so the accuracy test can
 // let headless Claude Code (`claude -p`) use retrieval exactly as the proxy would answer it.
 //   node compare/real/retrieve_mcp.js out/store/<case>.json
-// The store file is {"<id>": "<original text>", ...} written by run_tokentrim.js.
+// The store file is {"<id>": "<original text>", ...} written by run_tokentrimmer.js.
 const fs = require('node:fs');
 const readline = require('node:readline');
 const { TOOL, answer } = require('../../src/retrieve');
@@ -25,7 +25,7 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
       return reply({
         protocolVersion: (req.params && req.params.protocolVersion) || '2025-06-18',
         capabilities: { tools: {} },
-        serverInfo: { name: 'tokentrim', version: '0.1.0' },
+        serverInfo: { name: 'tokentrimmer', version: '0.1.0' },
       });
     case 'ping':
       return reply({});

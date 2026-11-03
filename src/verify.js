@@ -14,7 +14,7 @@ const formats = require('./formats');
 const { toolTexts, staleOptions } = require('./messages');
 
 const LOSSY = new Set(['json-drop-empty', 'log-collapse', 'cap-large-output']);
-const DEDUPE_REF = /^\[tokentrim: identical to the tool result in message (\d+)\]$/;
+const DEDUPE_REF = /^\[tokentrimmer: identical to the tool result in message (\d+)\]$/;
 
 function containsString(node, str) {
   if (typeof node === 'string') return node === str;

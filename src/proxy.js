@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 'use strict';
-// tokentrim: a local proxy between your app and the Anthropic / OpenAI APIs.
+// tokentrimmer: a local proxy between your app and the Anthropic / OpenAI APIs.
 // Point your SDK's base URL at http://localhost:8787 and requests are compressed in flight.
 const http = require('node:http');
 const fs = require('node:fs');
@@ -14,22 +14,22 @@ function createServer(config = {}) {
   const cfg = {
     anthropicUpstream: config.anthropicUpstream || process.env.ANTHROPIC_UPSTREAM || 'https://api.anthropic.com',
     openaiUpstream: config.openaiUpstream || process.env.OPENAI_UPSTREAM || 'https://api.openai.com',
-    mode: config.mode || process.env.TOKENTRIM_MODE || 'balanced',
+    mode: config.mode || process.env.TOKENTRIMMER_MODE || 'balanced',
     dryRun: config.dryRun ?? process.env.DRY_RUN === '1',
     keepRecent: config.keepRecent ?? 2,
     maxToolChars: config.maxToolChars ?? 12000,
     excludeTools:
       config.excludeTools ||
-      (process.env.TOKENTRIM_EXCLUDE_TOOLS ? process.env.TOKENTRIM_EXCLUDE_TOOLS.split(',').map((x) => x.trim()) : undefined),
+      (process.env.TOKENTRIMMER_EXCLUDE_TOOLS ? process.env.TOKENTRIMMER_EXCLUDE_TOOLS.split(',').map((x) => x.trim()) : undefined),
     // Check every rewritten request by decoding it. On any mismatch the original is sent instead.
-    verify: config.verify ?? process.env.TOKENTRIM_VERIFY !== '0',
+    verify: config.verify ?? process.env.TOKENTRIMMER_VERIFY !== '0',
     // Opt-in: compress tool results older than ~staleAfter messages harder (never in safe mode).
-    staleAfter: config.staleAfter ?? (Number(process.env.TOKENTRIM_STALE_AFTER) || 0),
-    staleChars: config.staleChars ?? (Number(process.env.TOKENTRIM_STALE_CHARS) || undefined),
-    staleStep: config.staleStep ?? (Number(process.env.TOKENTRIM_STALE_STEP) || undefined),
-    // Opt-in: shortened tool results get a note, and the proxy answers the model's tokentrim_retrieve
+    staleAfter: config.staleAfter ?? (Number(process.env.TOKENTRIMMER_STALE_AFTER) || 0),
+    staleChars: config.staleChars ?? (Number(process.env.TOKENTRIMMER_STALE_CHARS) || undefined),
+    staleStep: config.staleStep ?? (Number(process.env.TOKENTRIMMER_STALE_STEP) || undefined),
+    // Opt-in: shortened tool results get a note, and the proxy answers the model's tokentrimmer_retrieve
     // calls itself (Anthropic /v1/messages only).
-    retrieve: config.retrieve ?? process.env.TOKENTRIM_RETRIEVE === '1',
+    retrieve: config.retrieve ?? process.env.TOKENTRIMMER_RETRIEVE === '1',
     compressRequest: config.compressRequest || compressRequest,
   };
 
@@ -126,7 +126,7 @@ function createServer(config = {}) {
 
     const headers = {};
     for (const [k, v] of Object.entries(req.headers)) {
-      if (['host', 'content-length', 'accept-encoding', 'connection'].includes(k) || k.startsWith('x-tokentrim-')) continue;
+      if (['host', 'content-length', 'accept-encoding', 'connection'].includes(k) || k.startsWith('x-tokentrimmer-')) continue;
       headers[k] = v;
     }
     // Set when this request may run the retrieval loop: { body, store }.
@@ -134,8 +134,8 @@ function createServer(config = {}) {
 
     if (format && raw.length) {
       try {
-        const mode = MODES.includes(req.headers['x-tokentrim-mode']) ? req.headers['x-tokentrim-mode'] : cfg.mode;
-        const dry = req.headers['x-tokentrim-dry-run'] ? req.headers['x-tokentrim-dry-run'] === '1' : cfg.dryRun;
+        const mode = MODES.includes(req.headers['x-tokentrimmer-mode']) ? req.headers['x-tokentrimmer-mode'] : cfg.mode;
+        const dry = req.headers['x-tokentrimmer-dry-run'] ? req.headers['x-tokentrimmer-dry-run'] === '1' : cfg.dryRun;
         const body = JSON.parse(raw.toString('utf8'));
         if (cfg.retrieve && format === 'anthropic' && !dry) entry.expanded = retrieve.expand(body, memory);
         const opts = {
@@ -196,7 +196,7 @@ function createServer(config = {}) {
       });
     } catch (err) {
       entry.status = 502;
-      return json(res, 502, { error: `tokentrim could not reach upstream: ${err.message}` });
+      return json(res, 502, { error: `tokentrimmer could not reach upstream: ${err.message}` });
     }
 
     entry.status = up.status;
@@ -260,7 +260,7 @@ if (require.main === module) {
   const host = process.env.HOST || '127.0.0.1';
   const { server, cfg } = createServer();
   server.listen(port, host, () => {
-    console.log(`tokentrim listening on http://${host}:${port}  (mode: ${cfg.mode}${cfg.dryRun ? ', dry run' : ''})`);
+    console.log(`tokentrimmer listening on http://${host}:${port}  (mode: ${cfg.mode}${cfg.dryRun ? ', dry run' : ''})`);
     console.log('Anthropic SDK:  ANTHROPIC_BASE_URL=http://' + host + ':' + port);
     console.log('OpenAI SDK:     OPENAI_BASE_URL=http://' + host + ':' + port + '/v1');
     console.log('Dashboard:      http://' + host + ':' + port + '/');

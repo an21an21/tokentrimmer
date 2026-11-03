@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Runs Headroom over the same cases, then scores both tools.
 
-Needs a virtualenv with `headroom-ai==0.42.0 tiktoken`. Run extract.py and run_tokentrim.js first.
+Needs a virtualenv with `headroom-ai==0.42.0 tiktoken`. Run extract.py and run_tokentrimmer.js first.
 
 Two scores:
   final request   tokens of the last request (tiktoken o200k_base over the serialized messages,
@@ -93,17 +93,17 @@ def pct(after, before):
 def main():
     do_replay = "--no-replay" not in sys.argv
     cases = json.load(open(os.path.join(OUT, "cases.json")))
-    tt = {r["name"]: r for r in json.load(open(os.path.join(OUT, "tokentrim.json")))}
+    tt = {r["name"]: r for r in json.load(open(os.path.join(OUT, "tokentrimmer.json")))}
     modes = list(next(iter(tt.values()))["modes"])
     rows = []
     for c in cases:
-        row = {"name": c["name"], "original": tokens(c["original"]), "tokentrim": {}, "headroom": {},
-               "baselineReplay": {"tokentrim": tt[c["name"]]["baselineReplay"]}}
+        row = {"name": c["name"], "original": tokens(c["original"]), "tokentrimmer": {}, "headroom": {},
+               "baselineReplay": {"tokentrimmer": tt[c["name"]]["baselineReplay"]}}
         if do_replay:
             row["baselineReplay"]["headroom"] = replay(c["original"], lambda m: m)
         for m in modes:
             x = tt[c["name"]]["modes"][m]
-            row["tokentrim"][m] = {"tokens": tokens(x["messages"]), "ms": x["ms"], "deterministic": x["deterministic"],
+            row["tokentrimmer"][m] = {"tokens": tokens(x["messages"]), "ms": x["ms"], "deterministic": x["deterministic"],
                                    "verify": x["verify"], "replay": x.get("replay")}
         for label, kw in HEADROOM:
             row["headroom"][label] = run_headroom(c["original"], kw, label, do_replay)
@@ -111,7 +111,7 @@ def main():
         print("done", c["name"], flush=True)
     json.dump(rows, open(os.path.join(OUT, "results.json"), "w"), indent=1)
 
-    cols = [("tt " + m, "tokentrim", m) for m in modes] + [("hr " + l, "headroom", l) for l, _ in HEADROOM]
+    cols = [("tt " + m, "tokentrimmer", m) for m in modes] + [("hr " + l, "headroom", l) for l, _ in HEADROOM]
     lines = ["# Real-session comparison", "",
              f"{len(rows)} sessions. Final request: tiktoken o200k_base tokens. Savings vs. the original.", "",
              "| Session | Original | " + " | ".join(n for n, _, _ in cols) + " |",
@@ -134,7 +134,7 @@ def main():
         xs = [r[tool][key] for r in rows]
         ok = [x for x in xs if "error" not in x]
         det = "yes" if ok and all(x["deterministic"] for x in ok) else ("no" if ok else "n/a")
-        ver = f"{sum(x['verify']['FAILED'] for x in ok)} / {sum(x['verify']['lossy'] for x in ok)}" if tool == "tokentrim" else "n/a"
+        ver = f"{sum(x['verify']['FAILED'] for x in ok)} / {sum(x['verify']['lossy'] for x in ok)}" if tool == "tokentrimmer" else "n/a"
         cache = "not run"
         if all(r[tool][key].get("replay") for r in rows):
             base = sum(r["baselineReplay"][tool]["cost"] for r in rows)

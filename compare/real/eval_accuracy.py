@@ -5,14 +5,14 @@ For each session in compare/real/out/cases.json, questions are generated determi
 ORIGINAL tool results: each quotes one line and asks for the line that follows it in the same result.
 Only unambiguous pairs are used (every occurrence of the quoted line is followed by the same line).
 Questions are drawn from three strata per session: uniform over all tool-result lines, lines that
-tokentrim (balanced+stale10) no longer shows verbatim, and lines Headroom no longer shows verbatim.
+tokentrimmer (balanced+stale10) no longer shows verbatim, and lines Headroom no longer shows verbatim.
 
-Every condition (original, tokentrim configs, Headroom default) gets the same questions in one API call
+Every condition (original, tokentrimmer configs, Headroom default) gets the same questions in one API call
 appended after its compressed conversation. Answers are graded by exact match (whitespace-trimmed).
 
 Needs the venv used by run_headroom.py. Default backend is headless Claude Code (`claude -p`, your login);
 --backend api uses the Anthropic SDK (pip install anthropic) and ANTHROPIC_API_KEY. Run
-run_tokentrim.js first.
+run_tokentrimmer.js first.
 
   python compare/real/eval_accuracy.py --dry-run             # questions, presence stats, cost estimate; no API calls
   python compare/real/eval_accuracy.py [--model M] [--effort E]
@@ -25,7 +25,7 @@ import argparse, copy, json, os, random, sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(HERE, "out")
 CONDITIONS = ["original", "tt safe", "tt aggressive", "tt balanced+stale10", "tt balanced+stale10+retrieve", "hr default"]
-# Conditions whose shortened results can be read back through the tokentrim_retrieve tool (MCP in headless mode).
+# Conditions whose shortened results can be read back through the tokentrimmer_retrieve tool (MCP in headless mode).
 RETRIEVE = {"tt balanced+stale10+retrieve"}
 PER_STRATUM = {"uniform": 8, "tt-changed": 8, "hr-changed": 4}
 MIN_LINE = 16
@@ -133,7 +133,7 @@ def grade_loose(expected, got):
 
 def render_transcript(messages):
     """Plain-text transcript for headless mode. Message numbers match the request's messages array,
-    so tokentrim's "message M" / "tool result K" references stay meaningful."""
+    so tokentrimmer's "message M" / "tool result K" references stay meaningful."""
     out = []
     for i, m in enumerate(messages):
         out.append(f"=== message {i} ({m.get('role')}) ===")
@@ -165,7 +165,7 @@ HEADLESS_SYSTEM = ("You answer questions about a recorded conversation transcrip
 
 RETRIEVE_SYSTEM = ("You answer questions about a recorded conversation transcript that is given to you in full. "
                    "Use only the transcript. Some tool results in it were shortened and end with a note naming an id; "
-                   "the only tool you have, tokentrim_retrieve, returns the original text for such an id.")
+                   "the only tool you have, tokentrimmer_retrieve, returns the original text for such an id.")
 
 
 def store_file(name):
@@ -186,7 +186,7 @@ def ask_headless(conds_msgs, qs, model, effort, cwd, store=None):
     if store:
         server = {"command": "node", "args": [os.path.join(HERE, "retrieve_mcp.js"), store]}
         cmd += ["--strict-mcp-config", "--mcp-config", json.dumps({"mcpServers": {"tt": server}}),
-                "--allowedTools", "mcp__tt__tokentrim_retrieve"]
+                "--allowedTools", "mcp__tt__tokentrimmer_retrieve"]
     p = subprocess.run(cmd, input=prompt, capture_output=True, text=True, cwd=cwd, timeout=1800)
     try:
         d = json.loads(p.stdout)
@@ -199,7 +199,7 @@ def ask_headless(conds_msgs, qs, model, effort, cwd, store=None):
 
 def load_conditions():
     cases = json.load(open(os.path.join(OUT, "cases.json")))
-    tt = {r["name"]: r for r in json.load(open(os.path.join(OUT, "tokentrim.json")))}
+    tt = {r["name"]: r for r in json.load(open(os.path.join(OUT, "tokentrimmer.json")))}
     import headroom  # imported late so --help works without it
     out = []
     for c in cases:

@@ -72,12 +72,12 @@ function scriptedUpstream(script) {
 
 const T1 = { type: 'thinking', thinking: 'need the omitted lines', signature: 'sig-1' };
 const T2 = { type: 'thinking', thinking: 'found it', signature: 'sig-2' };
-const CALL = { type: 'tool_use', id: 'r1', name: 'tokentrim_retrieve', input: { id: ID, from_line: 200, to_line: 202 } };
+const CALL = { type: 'tool_use', id: 'r1', name: 'tokentrimmer_retrieve', input: { id: ID, from_line: 200, to_line: 202 } };
 const ANSWER = { type: 'text', text: 'Step 200 compiled module_1400.js.' };
 // What the client sees in place of the hidden call: the source of the facts stays in its history.
 const SHOWN = {
   type: 'text',
-  text: `[tokentrim_retrieve call r1 ${JSON.stringify(CALL.input)} returned:]\n[lines 200-202 of 400; call again with from_line=203 for more]\n${BIG.split('\n').slice(199, 202).join('\n')}`,
+  text: `[tokentrimmer_retrieve call r1 ${JSON.stringify(CALL.input)} returned:]\n[lines 200-202 of 400; call again with from_line=203 for more]\n${BIG.split('\n').slice(199, 202).join('\n')}`,
 };
 const SCRIPT = [
   { content: [T1, CALL], stop_reason: 'tool_use', usage: { input_tokens: 900, output_tokens: 40 } },
@@ -102,10 +102,10 @@ const post = (port, body) =>
 
 function checkUpstream(seen) {
   assert.strictEqual(seen.length, 2, 'one follow-up request');
-  for (const s of seen) assert.ok(s.body.tools.some((t) => t.name === 'tokentrim_retrieve'), 'tool offered on every request');
+  for (const s of seen) assert.ok(s.body.tools.some((t) => t.name === 'tokentrimmer_retrieve'), 'tool offered on every request');
   const shortened = seen[0].body.messages[2].content[0].content;
   assert.ok(shortened.length < BIG.length);
-  assert.ok(shortened.endsWith(`full text via tokentrim_retrieve {"id":"${ID}"}]`), 'shortened result carries the note');
+  assert.ok(shortened.endsWith(`full text via tokentrimmer_retrieve {"id":"${ID}"}]`), 'shortened result carries the note');
   const [asst, user] = seen[1].body.messages.slice(-2);
   assert.deepStrictEqual(asst, { role: 'assistant', content: [T1, CALL] }, 'the model sees its own call, thinking intact');
   const result = user.content[0];
@@ -233,7 +233,7 @@ test('retrieval notes: verified as lossy, and a wrong id or a note on lossless o
   safe.messages[2].content[0].content += formats.retrieveNote(formats.retrieveId(users));
   assert.strictEqual(verifyRequest(lossless, safe, { ...opts, mode: 'safe' }).ok, false);
 
-  assert.strictEqual(compressRequest(body, 'anthropic', { ...opts, retrieve: false }).body.messages[2].content[0].content.includes('tokentrim_retrieve'), false);
+  assert.strictEqual(compressRequest(body, 'anthropic', { ...opts, retrieve: false }).body.messages[2].content[0].content.includes('tokentrimmer_retrieve'), false);
 });
 
 test('stale rewrites ask the API to drop mismatched thinking blocks; nothing else is touched', () => {
@@ -269,7 +269,7 @@ test('proxy: a stale rewrite of a history with thinking blocks is sent with drop
     assert.ok(sent.body.messages[2].content[0].content.length < 1000, 'the old result was shortened');
     assert.deepStrictEqual(sent.body.thinking, { type: 'adaptive', block_binding: { prefix_mismatch_behavior: 'drop_block' } });
     assert.strictEqual(sent.headers['anthropic-beta'], 'thinking-binding-controls-2026-08-01');
-    assert.ok(!sent.body.tools.some((t) => t.name === 'tokentrim_retrieve'), 'retrieval is opt-in');
+    assert.ok(!sent.body.tools.some((t) => t.name === 'tokentrimmer_retrieve'), 'retrieval is opt-in');
   } finally {
     server.close();
     up.server.close();
