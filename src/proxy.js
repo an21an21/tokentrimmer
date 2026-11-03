@@ -256,11 +256,13 @@ module.exports = { createServer };
 
 if (require.main === module) {
   const port = Number(process.env.PORT || 8787);
+  // Loopback only by default: the dashboard and /stats have no auth, and the proxy would relay for anyone.
+  const host = process.env.HOST || '127.0.0.1';
   const { server, cfg } = createServer();
-  server.listen(port, () => {
-    console.log(`tokentrim listening on http://localhost:${port}  (mode: ${cfg.mode}${cfg.dryRun ? ', dry run' : ''})`);
-    console.log('Anthropic SDK:  ANTHROPIC_BASE_URL=http://localhost:' + port);
-    console.log('OpenAI SDK:     OPENAI_BASE_URL=http://localhost:' + port + '/v1');
-    console.log('Dashboard:      http://localhost:' + port + '/');
+  server.listen(port, host, () => {
+    console.log(`tokentrim listening on http://${host}:${port}  (mode: ${cfg.mode}${cfg.dryRun ? ', dry run' : ''})`);
+    console.log('Anthropic SDK:  ANTHROPIC_BASE_URL=http://' + host + ':' + port);
+    console.log('OpenAI SDK:     OPENAI_BASE_URL=http://' + host + ':' + port + '/v1');
+    console.log('Dashboard:      http://' + host + ':' + port + '/');
   });
 }

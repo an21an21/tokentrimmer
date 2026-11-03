@@ -4,16 +4,16 @@ A local proxy that sits between your app and the Anthropic or OpenAI API and
 compresses requests before they are sent. Zero dependencies, Node 18+.
 
 ```
-your app  ->  tokentrim (localhost:8787)  ->  api.anthropic.com / api.openai.com
+your app  ->  tokentrim (127.0.0.1:8787)  ->  api.anthropic.com / api.openai.com
 ```
 
 ## Run
 
 ```
 npm start
-# Anthropic SDK:  ANTHROPIC_BASE_URL=http://localhost:8787
-# OpenAI SDK:     OPENAI_BASE_URL=http://localhost:8787/v1
-# Dashboard:      http://localhost:8787/
+# Anthropic SDK:  ANTHROPIC_BASE_URL=http://127.0.0.1:8787
+# OpenAI SDK:     OPENAI_BASE_URL=http://127.0.0.1:8787/v1
+# Dashboard:      http://127.0.0.1:8787/
 ```
 
 Start with `DRY_RUN=1 npm start` first. Requests are measured and the dashboard
@@ -53,6 +53,7 @@ prefix stays identical between requests and provider prompt caching keeps workin
 | Env var | Default |
 |---|---|
 | `PORT` | 8787 |
+| `HOST` | 127.0.0.1 (loopback only; see Security) |
 | `TOKENTRIM_MODE` | balanced (`safe`, `balanced`, `aggressive`) |
 | `DRY_RUN` | off (`1` to measure only) |
 | `TOKENTRIM_VERIFY` | on (`0` to disable the runtime check) |
@@ -69,6 +70,27 @@ Per request: header `x-tokentrim-mode: safe|balanced|aggressive` and
 
 `POST /compress` with `{"text": "...", "mode": "balanced"}` returns compressed text
 for use outside the proxy. `GET /stats` returns the numbers the dashboard shows.
+
+## Security
+
+tokentrim sits between your app and the API, so it sees your API key and every request and response.
+What it does with them:
+
+- **Local only by default.** It listens on `127.0.0.1`. The dashboard, `/stats` and the proxy itself have no
+  authentication, so set `HOST` to another address only on a network you trust.
+- **Forwards only to the configured upstream.** Requests go to `ANTHROPIC_UPSTREAM` / `OPENAI_UPSTREAM`
+  (the official APIs by default), with your auth headers passed through unchanged. Pointing an upstream
+  somewhere else sends your key there too.
+- **No disk, no logs, no telemetry.** Nothing is written to disk; the console shows only the startup lines;
+  there are no other network calls.
+- **In memory, until restart:** `/stats` keeps the last 50 requests as numbers only (sizes, modes, techniques,
+  status), no content. With `TOKENTRIM_RETRIEVE=1` it also keeps the original text of shortened tool results
+  while answering a request, and the last 500 retrieval exchanges (conversation content) so replayed turns can
+  be restored.
+- **No dependencies.** Only Node built-ins, so there is no third-party code in the request path.
+- **The benchmark scripts are separate.** `compare/real/` reads your Claude Code sessions from
+  `~/.claude/projects` and writes them to the git-ignored `compare/real/out/`. `eval_accuracy.py` sends session
+  content to Claude (`claude -p` or the API), and only when you run it.
 
 ## Verification
 
