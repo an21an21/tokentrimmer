@@ -27,6 +27,8 @@ node compare/real/run_tokentrimmer.js         # each config: output, timing, det
 <venv>/bin/python compare/real/run_headroom.py   # Headroom profiles + o200k tokens + cache replay -> out/report.md (--no-replay is fast)
 ```
 
+Proxy-vs-proxy replay (needs `headroom-ai[proxy]==0.42.0`): start `node compare/real/capture_upstream.js 8790`, start each proxy with its upstream pointed there (`ANTHROPIC_UPSTREAM=http://127.0.0.1:8790`, Headroom `--anthropic-api-url`), then `<venv>/bin/python compare/real/run_proxies.py --capture=http://127.0.0.1:8790 "name=http://127.0.0.1:PORT" ...` -> `out/proxies.md`. Restart proxies between runs (Headroom's cache mode keeps per-conversation state). Never use port 8787 for benchmark proxies: it may be the proxy the current session runs through.
+
 ## Architecture
 
 Request flow: `proxy.js` → `messages.js` → `compress.js` (+ `formats.js`) → `verify.js` → upstream (→ `retrieve.js` loop when `TOKENTRIMMER_RETRIEVE=1`).

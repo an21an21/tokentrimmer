@@ -321,9 +321,35 @@ questions targeted cut content, stale + retrieval cost about 1.7x as much as sen
 only when old results are rarely needed again; check with dry run and the dashboard's billed input first. Recall of exact lines
 is a harsh test: it does not show whether a task still succeeds. The sample is small and from one person's work.
 
-Headroom was run only as a library (`headroom.compress`, version 0.42.0). Its proxy mode, which can let the model
-recover compressed content, was not tested, so the retrieval rows above have no Headroom counterpart. The scripts
-in `compare/` reproduce every number here; corrections are welcome.
+### Proxy against proxy
+
+The table above runs Headroom as a library on whole conversations. Headroom is usually run as a proxy, and its
+default proxy mode works differently (it freezes what it has already sent and compresses only the newest part),
+so `compare/real/run_proxies.py` also replays the same 9 sessions the way a client sends them: one request per
+user message, 1,237 requests in all, each through both proxies running locally (Headroom 0.42.0 `headroom proxy`,
+TokenTrimmer `npm start`). A stand-in upstream (`capture_upstream.js`) records exactly what each proxy would
+send to the API. Tokens include any retrieval tool a proxy adds.
+
+| Proxy, mode | Final request | Cache-weighted cost | Mean added latency |
+|---|---|---|---|
+| Headroom, `cache` (default) | 1.5% | 0.2% | 104 ms |
+| Headroom, `--lossless` | 1.6% | 0.9% | 66 ms |
+| Headroom, `token` | 5.8% | **-11.4%** (costs more than the original) | 914 ms |
+| TokenTrimmer, safe (default) | 3.7% | 2.6% | 12 ms |
+| TokenTrimmer, aggressive | 11.2% | 9.2% | 13 ms |
+| TokenTrimmer, balanced + stale 10 | 27.8% | 14.6% | 13 ms |
+| TokenTrimmer, balanced + stale 10 + retrieval | 26.9% | 13.5% | 15 ms |
+
+Headroom's `token` mode re-compresses earlier turns as the conversation grows, so the cached prefix keeps
+changing and most of each request is billed at the full rate. Headroom's `cache` mode avoids that but compresses
+little of these sessions. Latency is the proxy's own time per request on an Apple Silicon laptop, with a
+local upstream that answers instantly. The slowest single request took 17 s through Headroom `token` mode and
+0.4 s through TokenTrimmer. Where proxies add `cache_control` breakpoints they are ignored in the cost
+column, because they mark the cache rather than being part of it.
+
+Not measured here: Headroom's own retrieval (CCR) under a real model. In these runs its proxies added at most
+6 retrieval markers in total, so it would change little. The scripts in `compare/` reproduce every number here;
+corrections are welcome.
 
 TokenTrimmer is not affiliated with or endorsed by the Headroom project; the name is used only to identify the
 software compared.
