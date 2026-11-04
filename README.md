@@ -1,5 +1,7 @@
 # TokenTrimmer
 
+![TokenTrimmer: a local proxy that losslessly compresses tool output, e.g. a JSON array becomes a table](docs/social-preview.png)
+
 **Reduce Claude Code token usage and LLM API cost, without losing information.** TokenTrimmer compresses tool
 output (JSON, logs, grep results, repeated file contents) in every request before it reaches the Anthropic or
 OpenAI API, and keeps prompt caching working.
