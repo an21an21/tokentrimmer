@@ -1,5 +1,5 @@
 'use strict';
-// Applies the compression engine to Anthropic and OpenAI request bodies.
+// Applies the compression engine to Anthropic and OpenAI (Chat Completions and Responses) request bodies.
 // Rules: system prompts, tool definitions and plain-text turns are never touched; only tool results are.
 // A message's compressed form depends only on that message and earlier ones (plus the stepped stale
 // cutoff), never on how many messages follow it. That keeps the history append-only, which both prompt
@@ -47,17 +47,34 @@ function makeContext(opts) {
   };
 }
 
+// Text parts inside tool results: "text" (Anthropic, Chat Completions) or "input_text" (Responses).
+const isTextPart = (p) => p && (p.type === 'text' || p.type === 'input_text');
+// Responses API input items that carry a tool's output (in item.output).
+const OUTPUT_ITEMS = new Set(['function_call_output', 'custom_tool_call_output']);
+const CALL_ITEMS = new Set(['function_call', 'custom_tool_call']);
+
+// The conversation list: Anthropic / Chat Completions "messages", Responses API "input" items.
+// "message M" in a reference means entry M of this list.
+function turns(body) {
+  if (!body || typeof body !== 'object') return null;
+  if (Array.isArray(body.messages)) return body.messages;
+  if (Array.isArray(body.input)) return body.input;
+  return null;
+}
+
 // The tool-result texts of one message, in order. Anthropic: every tool_result block's string
-// content or text parts. OpenAI: a role "tool" message's content. Shared with the verifier so
-// "tool result K in message M" means the same thing on both sides.
+// content or text parts. OpenAI: a role "tool" message's content. Responses: a function_call_output /
+// custom_tool_call_output item's output. Shared with the verifier so "tool result K in message M"
+// means the same thing on both sides.
 function toolTexts(m) {
   const out = [];
   if (!m || typeof m !== 'object') return out;
   const pushAll = (c) => {
     if (typeof c === 'string') out.push(c);
-    else if (Array.isArray(c)) for (const p of c) if (p && p.type === 'text' && typeof p.text === 'string') out.push(p.text);
+    else if (Array.isArray(c)) for (const p of c) if (isTextPart(p) && typeof p.text === 'string') out.push(p.text);
   };
   if (m.role === 'tool') pushAll(m.content);
+  else if (OUTPUT_ITEMS.has(m.type)) pushAll(m.output);
   else if (Array.isArray(m.content)) for (const b of m.content) if (b && b.type === 'tool_result') pushAll(b.content);
   return out;
 }
@@ -233,7 +250,7 @@ function shrinkContent(holder, key, ctx, i, ex, counter) {
   const stale = i < ctx.staleBefore;
   const one = (s) => (typeof s === 'string' ? shrinkToolText(s, ctx, i, ex, ++counter.k, stale) : s);
   if (typeof holder[key] === 'string') holder[key] = one(holder[key]);
-  else if (Array.isArray(holder[key])) for (const p of holder[key]) if (p && p.type === 'text') p.text = one(p.text);
+  else if (Array.isArray(holder[key])) for (const p of holder[key]) if (isTextPart(p)) p.text = one(p.text);
 }
 
 function shrinkPlainText(text, ctx) {
@@ -293,18 +310,36 @@ function openai(body, ctx) {
   });
 }
 
+// OpenAI Responses API (Codex): only tool output items are touched. Messages, reasoning and compaction
+// items (often encrypted), instructions and tools pass through unchanged.
+function responses(body, ctx) {
+  const items = body.input;
+  items.forEach((m, i) => {
+    if (m && CALL_ITEMS.has(m.type) && m.call_id) ctx.names.set(m.call_id, m.name);
+    ctx.resultCounts.set(i, toolTexts(m).length);
+  });
+  ctx.staleBefore = staleBefore(ctx.opts, items.length);
+  items.forEach((m, i) => {
+    if (m && OUTPUT_ITEMS.has(m.type)) shrinkContent(m, 'output', ctx, i, isExcluded(ctx, ctx.names.get(m.call_id)), { k: 0 });
+  });
+}
+
+const FORMATS = { anthropic, openai, responses };
+
 // Returns { body, before, after, techniques, changed, store }. Never throws on odd input.
+// format: 'anthropic' (/v1/messages), 'openai' (/v1/chat/completions) or 'responses' (/v1/responses).
 // store maps retrieval ids to original texts (only filled with opts.retrieve).
 function compressRequest(body, format, opts) {
   const beforeText = JSON.stringify(body);
   const before = estimateTokens(beforeText);
-  if (!body || !Array.isArray(body.messages)) {
+  const list = format === 'responses' ? body && body.input : body && body.messages;
+  if (!Array.isArray(list) || !FORMATS[format]) {
     return { body, before, after: before, techniques: {}, changed: false, store: new Map() };
   }
   const clone = JSON.parse(beforeText);
   const ctx = makeContext(opts);
   try {
-    (format === 'anthropic' ? anthropic : openai)(clone, ctx);
+    FORMATS[format](clone, ctx);
   } catch {
     return { body, before, after: before, techniques: {}, changed: false, store: new Map() };
   }
@@ -322,4 +357,4 @@ function compressRequest(body, format, opts) {
   };
 }
 
-module.exports = { compressRequest, toolTexts, staleOptions, DEFAULT_EXCLUDE_TOOLS };
+module.exports = { compressRequest, toolTexts, turns, staleOptions, DEFAULT_EXCLUDE_TOOLS };

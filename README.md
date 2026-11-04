@@ -6,14 +6,14 @@
 
 **Reduce Claude Code token usage and LLM API cost, without losing information.** TokenTrimmer compresses tool
 output (JSON, logs, grep results, repeated file contents) in every request before it reaches the Anthropic or
-OpenAI API, and keeps prompt caching working.
+OpenAI API, and keeps prompt caching working. Works with Claude Code and Codex.
 
-A local proxy that sits between your app (Claude Code, the Anthropic or OpenAI SDK, any agent) and the API,
+A local proxy that sits between your app (Claude Code, Codex, the Anthropic or OpenAI SDK, any agent) and the API,
 and makes each request smaller before it is sent, without changing what the model can read. Zero dependencies,
 Node 18+, runs on your machine.
 
 ```
-your app  ->  TokenTrimmer (127.0.0.1:8787)  ->  api.anthropic.com / api.openai.com
+your app  ->  TokenTrimmer (127.0.0.1:8787)  ->  api.anthropic.com / api.openai.com / chatgpt.com (Codex)
 ```
 
 ## What it does
@@ -81,6 +81,7 @@ these runs. Method and full results: [Real sessions](#real-sessions) and [Proxy 
 ```
 npm install -g tokentrimmer      # or prefix each command with npx
 tokentrimmer claude              # starts the proxy in the background and runs Claude Code through it
+tokentrimmer codex               # the same for Codex (see "Use with Codex")
 ```
 
 Everything after `claude` goes to Claude Code unchanged (`tokentrimmer claude --resume`, `tokentrimmer claude -p "…"`).
@@ -93,9 +94,10 @@ dashboard shows what you would save, but the original request is forwarded uncha
 |---|---|
 | `tokentrimmer` | Run the proxy in the foreground (Ctrl-C to stop) |
 | `tokentrimmer claude [args]` | Run Claude Code through the proxy, starting it in the background if it isn't running |
+| `tokentrimmer codex [args]` | The same for Codex, with your ChatGPT login or API key |
 | `tokentrimmer doctor` | Check the proxy, its mode, and how Claude Code is routed (exit code 0 ok, 1 warnings, 2 broken) |
 | `tokentrimmer savings` | Lifetime and daily savings, from `~/.tokentrimmer/stats.json`; works without a running proxy |
-| `tokentrimmer stop` | Stop a proxy that `tokentrimmer claude` started in the background |
+| `tokentrimmer stop` | Stop a proxy that `tokentrimmer claude` or `codex` started in the background |
 | `tokentrimmer --help` | All options |
 
 Options go before the command: `tokentrimmer --mode balanced claude`, `tokentrimmer --port 9000 --dry-run`.
@@ -114,6 +116,7 @@ Options go before the command: `tokentrimmer --mode balanced claude`, `tokentrim
 | `--no-history` | `TOKENTRIMMER_HISTORY=0` | lifetime counts kept in `~/.tokentrimmer/` (`TOKENTRIMMER_HOME` moves it) |
 | `--no-inspect` | `TOKENTRIMMER_INSPECT=0` | the dashboard's before/after view is on (loopback only) |
 | | `ANTHROPIC_UPSTREAM` / `OPENAI_UPSTREAM` | https://api.anthropic.com / https://api.openai.com |
+| | `CHATGPT_UPSTREAM` | https://chatgpt.com/backend-api/codex (Codex signed in with ChatGPT) |
 
 Per request: header `x-tokentrimmer-mode: safe|balanced|aggressive` and `x-tokentrimmer-dry-run: 1`. These
 headers are not forwarded upstream. `POST /compress` with `{"text": "...", "mode": "balanced"}` returns compressed
@@ -158,6 +161,41 @@ content; see the accuracy results below before turning them on for coding work. 
 --stale-after 10 --retrieve` (stale results need a lossy mode) saves the most on long sessions and lets Claude fetch
 shortened results back; it is experimental.
 
+## Use with Codex
+
+```
+tokentrimmer codex               # or: tokentrimmer codex exec "…", tokentrimmer codex resume, …
+```
+
+Works with a ChatGPT login and with an API key. `tokentrimmer codex` passes Codex a model provider that points at
+the proxy (`-c model_providers.tokentrimmer={…}`), so `~/.codex/config.toml` is not changed, and the proxy sends
+requests carrying a ChatGPT login to ChatGPT's Codex backend and the rest to the OpenAI API. Only the tool outputs
+in `/v1/responses` requests are rewritten; messages, encrypted reasoning and compaction items, instructions and
+tools pass through as is. Everything after `codex` goes to Codex unchanged.
+
+The provider uses plain HTTP: Codex's built-in provider can use a WebSocket that sends only new items, which leaves
+nothing to compress, so this is the one behaviour that differs from running `codex` directly. Sessions started this
+way are recorded under the `tokentrimmer` provider. To set it up by hand, add the same provider to
+`~/.codex/config.toml`:
+
+```toml
+model_provider = "tokentrimmer"
+
+[model_providers.tokentrimmer]
+name = "TokenTrimmer"
+base_url = "http://127.0.0.1:8787/v1"
+wire_api = "responses"
+requires_openai_auth = true
+# http_headers = { "x-tokentrimmer-mode" = "balanced" }   # per-provider mode, optional
+```
+
+Expect smaller savings than with Claude Code. On the author's 78 Codex sessions (5,120 requests, replayed offline
+with `node compare/real/codex_replay.js safe aggressive`), safe mode made requests 3.8% smaller on average and the
+final request of each session 2.2% smaller (model-readable text; images and encrypted items left out), with every
+rewrite verified and about 11 ms per request. Aggressive mode: 8.6% and 8.3%, lossy. Codex already trims long
+command output, and tool output is only about 15% of what it sends. A short live run through ChatGPT's backend
+worked end to end; it has not been run on long live sessions yet.
+
 ## What it compresses
 
 | Technique | Mode | Lossless |
@@ -196,7 +234,8 @@ What it does with them:
   have no authentication, so set `--host` to another address only on a network you trust (the before/after view
   then stays off unless you set `TOKENTRIMMER_INSPECT=1`).
 - **Forwards only to the configured upstream.** Requests go to `ANTHROPIC_UPSTREAM` / `OPENAI_UPSTREAM`
-  (the official APIs by default), with your auth headers passed through unchanged. Pointing an upstream
+  (the official APIs by default), or `CHATGPT_UPSTREAM` for Codex requests that carry a ChatGPT login, with
+  your auth headers passed through unchanged. Pointing an upstream
   somewhere else sends your key there too.
 - **No telemetry, no content on disk.** There are no network calls besides the upstream. The command line keeps
   lifetime savings in `~/.tokentrimmer/stats.json` as counts only (requests, token estimates, technique names,
@@ -396,6 +435,6 @@ software compared.
   reported, which is the real figure.
 - Non-lossless modes can remove information the model needs. Balanced and
   aggressive are labelled in the output so the model knows something was omitted.
-- Streaming works (responses are piped through). Only `/v1/messages` and
-  `/v1/chat/completions` request bodies are rewritten; other routes pass through.
-- Tested against a mock upstream only, not live API traffic.
+- Streaming works (responses are piped through). Only `/v1/messages`, `/v1/chat/completions` and
+  `/v1/responses` request bodies are rewritten; other routes pass through. WebSocket connections are not proxied.
+- Responses API requests that use `previous_response_id` send only new items, so there is little to compress.

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 'use strict';
-// tokentrimmer: a local proxy between your app and the Anthropic / OpenAI APIs.
+// tokentrimmer: a local proxy between your app and the Anthropic / OpenAI APIs (and ChatGPT's Codex backend).
 // Point your SDK's base URL at http://localhost:8787 and requests are compressed in flight.
 const http = require('node:http');
 const fs = require('node:fs');
@@ -30,6 +30,8 @@ function createServer(config = {}) {
   const cfg = {
     anthropicUpstream: config.anthropicUpstream || process.env.ANTHROPIC_UPSTREAM || 'https://api.anthropic.com',
     openaiUpstream: config.openaiUpstream || process.env.OPENAI_UPSTREAM || 'https://api.openai.com',
+    // Codex signed in with ChatGPT: its /v1/... requests (marked by a chatgpt-account-id header) go here.
+    chatgptUpstream: config.chatgptUpstream || process.env.CHATGPT_UPSTREAM || 'https://chatgpt.com/backend-api/codex',
     mode: config.mode || process.env.TOKENTRIMMER_MODE || 'safe',
     dryRun: config.dryRun ?? process.env.DRY_RUN === '1',
     keepRecent: config.keepRecent ?? 2,
@@ -87,9 +89,10 @@ function createServer(config = {}) {
     res.end(JSON.stringify(obj));
   }
 
-  function pickFormat(req) {
+  function pickFormat(req, pathname) {
     if (req.url.startsWith('/v1/messages')) return 'anthropic';
     if (req.url.startsWith('/v1/chat/completions')) return 'openai';
+    if (pathname === '/v1/responses' && req.method === 'POST') return 'responses';
     return null;
   }
 
@@ -135,8 +138,11 @@ function createServer(config = {}) {
 
     // Everything else is proxied.
     const anthropic = isAnthropicRequest(req);
-    const upstream = (anthropic ? cfg.anthropicUpstream : cfg.openaiUpstream).replace(/\/$/, '');
-    const format = pickFormat(req);
+    // Codex with a ChatGPT login talks to ChatGPT's backend, whose paths have no /v1 prefix.
+    const chatgpt = !anthropic && 'chatgpt-account-id' in req.headers && url.pathname.startsWith('/v1/');
+    const upstream = (anthropic ? cfg.anthropicUpstream : chatgpt ? cfg.chatgptUpstream : cfg.openaiUpstream).replace(/\/$/, '');
+    const target = upstream + (chatgpt ? req.url.slice(3) : req.url);
+    const format = pickFormat(req, url.pathname);
     const started = Date.now();
     let raw = await readBody(req);
     const entry = {
@@ -218,7 +224,8 @@ function createServer(config = {}) {
         if (history) history.record({ ...entry, techniques: r.techniques, verifyFailed: entry.check.startsWith('FAILED') });
         if (cfg.inspect && r.changed) {
           // In memory only, never written anywhere; what the dry run would have sent, too.
-          inspected.set(entry.id, { original: { messages: original.messages }, sent: { messages: r.body.messages } });
+          const key = format === 'responses' ? 'input' : 'messages';
+          inspected.set(entry.id, { original: { [key]: original[key] }, sent: { [key]: r.body[key] } });
           entry.inspect = true;
           for (const id of inspected.keys()) {
             if (inspected.size <= INSPECT_KEEP) break;
@@ -236,7 +243,7 @@ function createServer(config = {}) {
 
     let up;
     try {
-      up = await fetch(upstream + req.url, {
+      up = await fetch(target, {
         method: req.method,
         headers,
         body: ['GET', 'HEAD'].includes(req.method) ? undefined : raw,
@@ -254,7 +261,7 @@ function createServer(config = {}) {
     if (loop && up.ok) {
       const post = (b) => {
         const text = JSON.stringify(b);
-        return fetch(upstream + req.url, { method: 'POST', headers: { ...headers, 'content-length': String(Buffer.byteLength(text)) }, body: text });
+        return fetch(target, { method: 'POST', headers: { ...headers, 'content-length': String(Buffer.byteLength(text)) }, body: text });
       };
       const streaming = (up.headers.get('content-type') || '').includes('text/event-stream');
       let rounds = 0;
@@ -286,8 +293,9 @@ function createServer(config = {}) {
     }
     res.end();
 
-    const m = tee.match(/"input_tokens"\s*:\s*(\d+)/) || tee.match(/"prompt_tokens"\s*:\s*(\d+)/);
-    if (m) entry.reportedInput = Number(m[1]);
+    // The largest reported count: a Responses stream starts with zeros and reports usage at the end.
+    const counts = [...tee.matchAll(/"(?:input|prompt)_tokens"\s*:\s*(\d+)/g)].map((x) => Number(x[1]));
+    if (counts.length) entry.reportedInput = Math.max(...counts);
     entry.ms = Date.now() - started;
   }
 
@@ -326,6 +334,7 @@ function start(opts = {}) {
       console.log(`tokentrimmer ${VERSION} listening on ${base}  (mode: ${cfg.mode}${cfg.dryRun ? ', dry run' : ''})`);
       console.log(`Claude Code:    ANTHROPIC_BASE_URL=${base} claude   (or: tokentrimmer claude)`);
       console.log(`Anthropic SDK:  ANTHROPIC_BASE_URL=${base}`);
+      console.log(`Codex:          tokentrimmer codex`);
       console.log(`OpenAI SDK:     OPENAI_BASE_URL=${base}/v1`);
       console.log(`Dashboard:      ${base}/`);
       if (!isLoopback(host)) console.log('Warning: listening beyond this machine. Anyone who can reach it can use your API key through it.');

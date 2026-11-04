@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
-// tokentrimmer command line. Options come before the command; for `claude`, everything after it is
-// passed to Claude Code unchanged:  tokentrimmer --mode balanced claude --resume
+// tokentrimmer command line. Options come before the command; for `claude` and `codex`, everything after
+// it is passed to that program unchanged:  tokentrimmer --mode balanced claude --resume
 const fs = require('node:fs');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
@@ -10,14 +10,15 @@ const history = require('./history');
 const VERSION = require('../package.json').version;
 const MODES = ['safe', 'balanced', 'aggressive'];
 
-const HELP = `tokentrimmer ${VERSION}: a local proxy that shrinks tool output in Claude Code / Anthropic / OpenAI requests.
+const HELP = `tokentrimmer ${VERSION}: a local proxy that shrinks tool output in Claude Code / Codex / Anthropic / OpenAI requests.
 
 Usage:
   tokentrimmer [options]                 start the proxy (same as: tokentrimmer start)
   tokentrimmer [options] claude [args]   run Claude Code through the proxy, starting it in the background if needed
+  tokentrimmer [options] codex [args]    run Codex through the proxy (ChatGPT login or API key)
   tokentrimmer doctor                    check the proxy and how Claude Code is routed
   tokentrimmer savings                   lifetime and daily savings (works without a running proxy)
-  tokentrimmer stop                      stop a proxy started in the background by \`tokentrimmer claude\`
+  tokentrimmer stop                      stop a proxy started in the background by \`tokentrimmer claude\` / \`codex\`
 
 Options (each also has an environment variable):
   -p, --port <n>           port, default 8787                                   PORT
@@ -68,9 +69,9 @@ function parse(argv) {
       case '--no-inspect': o.inspect = false; break;
       default:
         if (a.startsWith('-')) fail(`unknown option ${a}`);
-        if (!['start', 'claude', 'doctor', 'savings', 'stop'].includes(a)) fail(`unknown command ${a}`);
+        if (!['start', 'claude', 'codex', 'doctor', 'savings', 'stop'].includes(a)) fail(`unknown command ${a}`);
         o.command = a;
-        if (a === 'claude') {
+        if (a === 'claude' || a === 'codex') {
           o.rest = argv.slice(i + 1);
           return o;
         }
@@ -145,29 +146,60 @@ async function startBackground(o) {
   fail(`the proxy did not start; see ${path.join(dir, `proxy-${port}.log`)}`);
 }
 
-async function cmdClaude(o) {
+// Make sure a proxy answers on the port: reuse a running one or start one in the background. Returns
+// { base, headers }: per-request headers that apply this command's mode / dry run to a proxy that was
+// already running with other settings (instead of restarting it under other sessions).
+async function ensureProxy(o) {
   const base = baseOf(o);
   let h = await health(base);
-  const env = { ...process.env, ANTHROPIC_BASE_URL: base };
   if (h && h.name !== 'tokentrimmer') fail(`something else is answering on port ${portOf(o)}; pick another with --port`);
+  const headers = {};
   if (!h) {
     h = await startBackground(o);
     console.error(`tokentrimmer: started in the background on ${base} (mode: ${h.mode}); stop it with \`tokentrimmer stop\``);
-  } else {
-    // A proxy is already running with other settings: ask for this mode / dry run per request instead of restarting it.
-    const extra = [];
-    if (o.mode && o.mode !== h.mode) extra.push(`x-tokentrimmer-mode: ${o.mode}`);
-    if (o.dryRun && !h.dryRun) extra.push('x-tokentrimmer-dry-run: 1');
-    if (extra.length) {
-      env.ANTHROPIC_CUSTOM_HEADERS = [env.ANTHROPIC_CUSTOM_HEADERS, ...extra].filter(Boolean).join('\n');
-      const what = [o.mode && o.mode !== h.mode && `${o.mode} mode`, o.dryRun && !h.dryRun && 'dry run'].filter(Boolean).join(', ');
-      console.error(`tokentrimmer: using the proxy already on ${base}, with ${what} for this session`);
-    }
+    return { base, headers };
   }
-  const child = spawn('claude', o.rest, { stdio: 'inherit', env, shell: process.platform === 'win32' });
-  child.on('error', (e) => fail(e.code === 'ENOENT' ? 'Claude Code (`claude`) was not found on your PATH' : e.message));
+  if (o.mode && o.mode !== h.mode) headers['x-tokentrimmer-mode'] = o.mode;
+  if (o.dryRun && !h.dryRun) headers['x-tokentrimmer-dry-run'] = '1';
+  if (Object.keys(headers).length) {
+    const what = [headers['x-tokentrimmer-mode'] && `${o.mode} mode`, headers['x-tokentrimmer-dry-run'] && 'dry run'].filter(Boolean).join(', ');
+    console.error(`tokentrimmer: using the proxy already on ${base}, with ${what} for this session`);
+  }
+  return { base, headers };
+}
+
+function runClient(cmd, args, env, label) {
+  const child = spawn(cmd, args, { stdio: 'inherit', env, shell: process.platform === 'win32' });
+  child.on('error', (e) => fail(e.code === 'ENOENT' ? `${label} (\`${cmd}\`) was not found on your PATH` : e.message));
   child.on('exit', (code, signal) => process.exit(signal ? 1 : code ?? 0));
-  for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => {}); // Claude Code handles Ctrl-C itself
+  for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => {}); // the client handles Ctrl-C itself
+}
+
+async function cmdClaude(o) {
+  const { base, headers } = await ensureProxy(o);
+  const env = { ...process.env, ANTHROPIC_BASE_URL: base };
+  const extra = Object.entries(headers).map(([k, v]) => `${k}: ${v}`);
+  if (extra.length) env.ANTHROPIC_CUSTOM_HEADERS = [env.ANTHROPIC_CUSTOM_HEADERS, ...extra].filter(Boolean).join('\n');
+  runClient('claude', o.rest, env, 'Claude Code');
+}
+
+// Codex: a model provider pointing at the proxy, given with -c overrides so ~/.codex/config.toml is not
+// touched. It uses Codex's own login (ChatGPT or API key) and plain HTTP: the built-in provider may use
+// a WebSocket that sends only new items, which leaves nothing to compress.
+const tomlString = (s) => JSON.stringify(String(s));
+
+function codexArgs(base, headers, rest) {
+  const fields = [
+    'name="TokenTrimmer"', `base_url=${tomlString(`${base}/v1`)}`, 'wire_api="responses"', 'requires_openai_auth=true',
+  ];
+  const h = Object.entries(headers).map(([k, v]) => `${tomlString(k)}=${tomlString(v)}`);
+  if (h.length) fields.push(`http_headers={${h.join(',')}}`);
+  return ['-c', `model_providers.tokentrimmer={${fields.join(',')}}`, '-c', 'model_provider="tokentrimmer"', ...rest];
+}
+
+async function cmdCodex(o) {
+  const { base, headers } = await ensureProxy(o);
+  runClient('codex', codexArgs(base, headers, o.rest), process.env, 'Codex');
 }
 
 async function cmdStop(o) {
@@ -178,7 +210,7 @@ async function cmdStop(o) {
   } catch {
     const h = await health(baseOf(o));
     if (!h) return console.log(`tokentrimmer: no proxy running on port ${port}`);
-    fail(`the proxy on port ${port} was not started by \`tokentrimmer claude\`; stop it where it runs (Ctrl-C)`);
+    fail(`the proxy on port ${port} was not started by \`tokentrimmer claude\` or \`codex\`; stop it where it runs (Ctrl-C)`);
   }
   // Only signal the saved process if a tokentrimmer proxy is really answering there (pids get reused).
   const h = await health(baseOf(o));
@@ -190,12 +222,17 @@ async function cmdStop(o) {
     process.kill(pid, 'SIGTERM');
     console.log(`tokentrimmer: stopped the proxy on port ${port}`);
   } catch {
-    console.log(`tokentrimmer: the proxy on port ${port} was not started by \`tokentrimmer claude\`; stop it where it runs (Ctrl-C)`);
+    console.log(`tokentrimmer: the proxy on port ${port} was not started by \`tokentrimmer claude\` or \`codex\`; stop it where it runs (Ctrl-C)`);
   }
   fs.rmSync(pidFile(port), { force: true });
 }
 
 const mark = { ok: '✓', warn: '!', bad: '✗' };
+
+function onPath(cmd) {
+  const which = spawn(process.platform === 'win32' ? 'where' : 'which', [cmd]);
+  return new Promise((r) => which.on('exit', (c) => r(c === 0)).on('error', () => r(false)));
+}
 
 async function cmdDoctor(o) {
   const port = portOf(o);
@@ -238,9 +275,10 @@ async function cmdDoctor(o) {
     add('ok', 'no ~/.claude/settings.json override');
   }
 
-  const which = spawn(process.platform === 'win32' ? 'where' : 'which', ['claude']);
-  const found = await new Promise((r) => which.on('exit', (c) => r(c === 0)).on('error', () => r(false)));
+  const found = await onPath('claude');
   add(found ? 'ok' : 'warn', found ? 'Claude Code (`claude`) is on your PATH' : 'Claude Code (`claude`) not found on your PATH');
+  const codex = await onPath('codex');
+  if (codex) add('ok', 'Codex (`codex`) is on your PATH: run it through the proxy with `tokentrimmer codex`');
 
   const file = history.defaultFile();
   add('ok', fs.existsSync(file) ? `lifetime savings kept in ${file}` : 'no lifetime savings recorded yet');
@@ -282,9 +320,12 @@ async function main() {
   if (o.version) return console.log(VERSION);
   if (o.command === 'start') return cmdStart(o);
   if (o.command === 'claude') return cmdClaude(o);
+  if (o.command === 'codex') return cmdCodex(o);
   if (o.command === 'doctor') return cmdDoctor(o);
   if (o.command === 'savings') return cmdSavings(o);
   if (o.command === 'stop') return cmdStop(o);
 }
 
-main().catch((e) => fail(e.message));
+if (require.main === module) main().catch((e) => fail(e.message));
+
+module.exports = { codexArgs };

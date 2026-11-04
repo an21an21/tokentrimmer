@@ -11,7 +11,7 @@
 const { isDeepStrictEqual } = require('node:util');
 const { compressText, cleanWhitespace } = require('./compress');
 const formats = require('./formats');
-const { toolTexts, staleOptions } = require('./messages');
+const { toolTexts, turns, staleOptions } = require('./messages');
 
 const LOSSY = new Set(['json-drop-empty', 'log-collapse', 'cap-large-output']);
 const DEDUPE_REF = formats.IDENTICAL_REF;
@@ -37,7 +37,7 @@ function classify(orig, comp, originalBody, compressedBody, opts) {
   }
   const ref = DEDUPE_REF.exec(comp);
   if (ref) {
-    const target = originalBody.messages[Number(ref[1])];
+    const target = (turns(originalBody) || [])[Number(ref[1])];
     return containsString(target, orig)
       ? { status: 'exact', techniques: ['dedupe-identical'] }
       : { status: 'FAILED', techniques: ['dedupe-identical'], reason: 'referenced message does not contain this text' };
@@ -47,7 +47,7 @@ function classify(orig, comp, originalBody, compressedBody, opts) {
     // both that nothing was lost and that the referenced lines really are in front of the model.
     const t = ['dedupe-block'];
     try {
-      const decoded = formats.decodeBlockRefs(comp, (m, k) => toolTexts(compressedBody.messages[m])[k - 1]);
+      const decoded = formats.decodeBlockRefs(comp, (m, k) => toolTexts((turns(compressedBody) || [])[m])[k - 1]);
       if (decoded === orig) return { status: 'exact', techniques: t };
       // References inside a compressed form: what they expand to must be what the compressor produces.
       if (formats.hasBlockRefs(decoded)) return { status: 'FAILED', techniques: t, reason: 'a reference points at another reference' };
@@ -120,7 +120,8 @@ if (require.main === module) {
     process.exit(2);
   }
   const body = JSON.parse(fs.readFileSync(file, 'utf8'));
-  const format = Array.isArray(body.messages) && body.messages.some((m) => m.role === 'tool') ? 'openai' : 'anthropic';
+  const format = Array.isArray(body.input) && !body.messages ? 'responses'
+    : Array.isArray(body.messages) && body.messages.some((m) => m.role === 'tool') ? 'openai' : 'anthropic';
   const opts = { mode, keepRecent: 2, maxToolChars: 12000 };
   const r = compressRequest(body, format, opts);
   const v = verifyRequest(body, r.body, opts);

@@ -533,3 +533,54 @@ test('cli: verify command reports a verdict and exit code', () => {
   const none = spawnSync('node', [path.join(__dirname, '../src/verify.js')], { encoding: 'utf8' });
   assert.strictEqual(none.status, 2);
 });
+
+// The same random conversations in OpenAI Responses API form (what Codex sends): function_call /
+// custom_tool_call items, outputs as a string or input_text parts, and opaque reasoning items in between.
+function toResponses(body, r) {
+  const input = [];
+  for (const m of body.messages) {
+    if (typeof m.content === 'string') {
+      input.push({ type: 'message', role: m.role, content: [{ type: m.role === 'user' ? 'input_text' : 'output_text', text: m.content }] });
+      continue;
+    }
+    for (const b of m.content) {
+      if (b.type === 'tool_use') {
+        if (r() < 0.5) input.push({ type: 'reasoning', id: `rs_${b.id}`, summary: [], encrypted_content: 'gAAAA' + 'x'.repeat(200) });
+        const custom = r() < 0.5;
+        input.push(custom ? { type: 'custom_tool_call', call_id: b.id, name: b.name, input: 'ls' } : { type: 'function_call', call_id: b.id, name: b.name, arguments: '{}' });
+        b.custom = custom;
+      } else if (b.type === 'tool_result') {
+        const text = typeof b.content === 'string' ? b.content : b.content[0].text;
+        const call = input.find((x) => x.call_id === b.tool_use_id);
+        const output = r() < 0.5 ? text : [{ type: 'input_text', text }];
+        input.push({ type: call.type === 'custom_tool_call' ? 'custom_tool_call_output' : 'function_call_output', call_id: b.tool_use_id, output });
+      }
+    }
+  }
+  return { model: 'gpt-x', instructions: 'You are Codex.', input, tools: [], store: false, stream: true };
+}
+
+test('fuzz: Responses API (Codex) bodies verify, stay lossless in safe mode, are deterministic and append-only', () => {
+  const r = rng(5151);
+  let blocks = 0;
+  for (let i = 0; i < 200; i++) {
+    const body = toResponses(rndConversation(r, false), r);
+    for (const mode of ['safe', 'balanced', 'aggressive']) {
+      const opts = { mode, keepRecent: 2, maxToolChars: 12000 };
+      const out = compressRequest(body, 'responses', opts);
+      const v = verifyRequest(body, out.body, opts);
+      assert.ok(v.ok, `case ${i} ${mode}: ${JSON.stringify(v.fields.filter((f) => f.status === 'FAILED')).slice(0, 600)}`);
+      for (const f of v.fields) assert.match(f.path, /^input\[\d+\]\.output(\[\d+\]\.text)?$/, 'only tool outputs change');
+      if (mode === 'safe') {
+        assert.strictEqual(v.lossless, true);
+        blocks += out.techniques['dedupe-block'] || 0;
+      }
+      assert.deepStrictEqual(compressRequest(body, 'responses', opts).body, out.body, 'output must be deterministic');
+      // Append-only: compressing a shorter history gives the same items for the shared prefix.
+      const cut = 1 + Math.floor(r() * (body.input.length - 1));
+      const shorter = compressRequest({ ...body, input: body.input.slice(0, cut) }, 'responses', opts);
+      assert.deepStrictEqual(shorter.body.input, out.body.input.slice(0, cut), `case ${i} ${mode}: prefix changed`);
+    }
+  }
+  assert.ok(blocks > 200, `block dedupe should trigger on generated conversations, got ${blocks}`);
+});
