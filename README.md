@@ -37,11 +37,44 @@ for over and over. TokenTrimmer rewrites tool results into a shorter form as eac
 - **You can see what it does.** A local dashboard shows tokens before and after for every request, and dry-run
   mode measures savings without changing anything.
 
-What to expect: on real Claude Code sessions, safe mode saved about 7% of input tokens (5% of the bill with prompt
-caching) with no loss in answer accuracy, and the lossy modes saved 14–30% at a measurable accuracy cost (see
-[Real sessions](#real-sessions)).
-Savings depend heavily on how much repetitive tool output your sessions have; run dry-run mode first to see
-your own number.
+## Results at a glance
+
+TokenTrimmer 0.2.0 against Headroom 0.42.0, on 9 real Claude Code sessions (1,237 requests). Each session is
+replayed through both proxies one request at a time, the way Claude Code sends it.
+
+| Proxy, mode | Lossless | Final request | Session cost with prompt caching | Added latency | Slowest request |
+|---|---|---:|---:|---:|---:|
+| **TokenTrimmer safe (default)** | **yes, every request verified** | **7.2% smaller** | **5.3% cheaper** | **9 ms** | **0.13 s** |
+| TokenTrimmer aggressive | no | 14.3% smaller | 11.6% cheaper | 9 ms | 0.05 s |
+| TokenTrimmer stale10 | no | 29.8% smaller | 16.4% cheaper | 9 ms | 0.06 s |
+| TokenTrimmer stale10 + retrieval | no, Claude can fetch cut text back | 28.8% smaller | 15.3% cheaper | 10 ms | 0.07 s |
+| Headroom `token` | no | 5.8% smaller | **11.4% more expensive** | 914 ms | 16.6 s |
+| Headroom `--lossless` | yes | 1.6% smaller | 0.9% cheaper | 66 ms | 1.2 s |
+| Headroom `cache` (default) | partly | 1.5% smaller | 0.2% cheaper | 104 ms | 6.9 s |
+
+Accuracy: Claude Opus 5.5 was asked to recall exact lines from old tool output in each compressed conversation.
+
+| | Correct | Wrong guesses |
+|---|---:|---:|
+| Original, uncompressed | 100% | 0 |
+| **TokenTrimmer safe** | **100%** (140/140, plus 38/38 where the answer sat behind a reference) | **0** |
+| TokenTrimmer stale10 + retrieval | 99% | 1 |
+| Headroom default | 95% | 4 |
+| TokenTrimmer aggressive | 86% | 1 |
+| TokenTrimmer stale10 alone | 35% | 2 |
+
+- **Savings:** TokenTrimmer's lossless default saves more than Headroom's most aggressive mode, with nothing lost.
+- **Cost:** this is the column your bill follows. Rewriting earlier turns breaks the prompt cache: Headroom's `token`
+  mode makes each request smaller but the session dearer. TokenTrimmer never changes what was already sent.
+- **Speed:** about 9 ms per request, against 66–914 ms.
+- **Per session:** lossless TokenTrimmer beat Headroom `token` on 5 of the 9 sessions, tied 1, and lost 3 narrowly
+  (for example 2.1% against 3.1%). The biggest gaps were browser-heavy sessions (24.9% against 19.2%).
+
+Caveats: the 9 sessions are the author's own, mostly browser automation and assistant work, so your savings will
+differ. Run dry-run mode first to see your own number. The accuracy rows other than TokenTrimmer safe were measured
+with v0.1.1. Headroom's own retrieval was not tested with a model; its proxies added at most 6 retrieval markers in
+these runs. Method and full results: [Real sessions](#real-sessions) and [Proxy against proxy](#proxy-against-proxy).
+`compare/` reproduces every number.
 
 ## Run
 
