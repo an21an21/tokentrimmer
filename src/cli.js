@@ -153,11 +153,16 @@ async function cmdClaude(o) {
   if (!h) {
     h = await startBackground(o);
     console.error(`tokentrimmer: started in the background on ${base} (mode: ${h.mode}); stop it with \`tokentrimmer stop\``);
-  } else if (o.mode && o.mode !== h.mode) {
-    // A proxy is already running in another mode: ask for this mode per request instead of restarting it.
-    const extra = `x-tokentrimmer-mode: ${o.mode}`;
-    env.ANTHROPIC_CUSTOM_HEADERS = env.ANTHROPIC_CUSTOM_HEADERS ? `${env.ANTHROPIC_CUSTOM_HEADERS}\n${extra}` : extra;
-    console.error(`tokentrimmer: using the proxy already on ${base}, in ${o.mode} mode for this session`);
+  } else {
+    // A proxy is already running with other settings: ask for this mode / dry run per request instead of restarting it.
+    const extra = [];
+    if (o.mode && o.mode !== h.mode) extra.push(`x-tokentrimmer-mode: ${o.mode}`);
+    if (o.dryRun && !h.dryRun) extra.push('x-tokentrimmer-dry-run: 1');
+    if (extra.length) {
+      env.ANTHROPIC_CUSTOM_HEADERS = [env.ANTHROPIC_CUSTOM_HEADERS, ...extra].filter(Boolean).join('\n');
+      const what = [o.mode && o.mode !== h.mode && `${o.mode} mode`, o.dryRun && !h.dryRun && 'dry run'].filter(Boolean).join(', ');
+      console.error(`tokentrimmer: using the proxy already on ${base}, with ${what} for this session`);
+    }
   }
   const child = spawn('claude', o.rest, { stdio: 'inherit', env, shell: process.platform === 'win32' });
   child.on('error', (e) => fail(e.code === 'ENOENT' ? 'Claude Code (`claude`) was not found on your PATH' : e.message));

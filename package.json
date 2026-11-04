@@ -1,6 +1,6 @@
 {
   "name": "tokentrimmer",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Cut Claude Code, Anthropic and OpenAI token usage and API cost: a local proxy that losslessly compresses tool output (JSON, logs, grep) before it reaches the API. Prompt-cache safe, zero dependencies.",
   "keywords": [
     "claude",
