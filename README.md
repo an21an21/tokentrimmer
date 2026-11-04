@@ -1,5 +1,9 @@
 # TokenTrimmer
 
+**Reduce Claude Code token usage and LLM API cost, without losing information.** TokenTrimmer compresses tool
+output (JSON, logs, grep results, repeated file contents) in every request before it reaches the Anthropic or
+OpenAI API, and keeps prompt caching working.
+
 A local proxy that sits between your app (Claude Code, the Anthropic or OpenAI SDK, any agent) and the API,
 and makes each request smaller before it is sent, without changing what the model can read. Zero dependencies,
 Node 18+, runs on your machine.

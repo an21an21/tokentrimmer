@@ -1,14 +1,51 @@
 {
   "name": "tokentrimmer",
   "version": "0.1.0",
-  "description": "Local proxy that compresses LLM requests (tool output, JSON, logs) before they reach the API.",
-  "bin": { "tokentrimmer": "src/proxy.js" },
+  "description": "Cut Claude Code, Anthropic and OpenAI token usage and API cost: a local proxy that losslessly compresses tool output (JSON, logs, grep) before it reaches the API. Prompt-cache safe, zero dependencies.",
+  "keywords": [
+    "claude",
+    "claude-code",
+    "anthropic",
+    "openai",
+    "llm",
+    "tokens",
+    "token-usage",
+    "token-optimization",
+    "reduce-tokens",
+    "prompt-compression",
+    "context-compression",
+    "prompt-caching",
+    "api-cost",
+    "llm-proxy",
+    "proxy",
+    "compression",
+    "ai-agents"
+  ],
+  "author": "Ani Vishwakarma",
+  "license": "MIT",
+  "homepage": "https://github.com/an21an21/tokentrimmer#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/an21an21/tokentrimmer.git"
+  },
+  "bugs": {
+    "url": "https://github.com/an21an21/tokentrimmer/issues"
+  },
+  "bin": {
+    "tokentrimmer": "src/proxy.js"
+  },
+  "files": [
+    "src/",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "start": "node src/proxy.js",
     "test": "node --test test/*.test.js",
     "bench": "node bench.js",
     "verify": "node src/verify.js"
   },
-  "engines": { "node": ">=18" },
-  "license": "MIT"
+  "engines": {
+    "node": ">=18"
+  }
 }
