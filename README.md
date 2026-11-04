@@ -1,5 +1,7 @@
 # TokenTrimmer
 
+[![npm](https://img.shields.io/npm/v/tokentrimmer)](https://www.npmjs.com/package/tokentrimmer) [![license: MIT](https://img.shields.io/npm/l/tokentrimmer)](LICENSE) ![dependencies: 0](https://img.shields.io/badge/dependencies-0-brightgreen)
+
 ![TokenTrimmer: a local proxy that losslessly compresses tool output, e.g. a JSON array becomes a table](docs/social-preview.png)
 
 **Reduce Claude Code token usage and LLM API cost, without losing information.** TokenTrimmer compresses tool
@@ -43,24 +45,31 @@ your own number.
 ## Run
 
 ```
-npm start
+npx tokentrimmer
 # Anthropic SDK:  ANTHROPIC_BASE_URL=http://127.0.0.1:8787
 # OpenAI SDK:     OPENAI_BASE_URL=http://127.0.0.1:8787/v1
 # Dashboard:      http://127.0.0.1:8787/
 ```
 
-Start with `DRY_RUN=1 npm start` first. Requests are measured and the dashboard
+Start with `DRY_RUN=1 npx tokentrimmer` first. Requests are measured and the dashboard
 shows what you would save, but the original request is forwarded unchanged.
 
 ## Use with Claude
 
-Install (not on npm; nothing to `npm install`, there are no dependencies):
+Run it straight from npm (Node 18+, no dependencies):
 
 ```
-git clone https://github.com/an21an21/tokentrimmer.git
-cd tokentrimmer
-npm start        # safe (lossless) mode; leave this running
+npx tokentrimmer                 # safe (lossless) mode; leave this running
 ```
+
+Or install it once, so it starts instantly and works offline:
+
+```
+npm install -g tokentrimmer
+tokentrimmer
+```
+
+From source: `git clone https://github.com/an21an21/tokentrimmer.git && cd tokentrimmer && npm start`.
 
 ### Claude Code in the terminal
 
@@ -69,8 +78,7 @@ Works with both an API key and a Claude subscription login; the proxy forwards y
 1. Terminal 1, start the proxy and leave it running:
 
    ```
-   cd tokentrimmer
-   npm start
+   npx tokentrimmer
    ```
 
 2. Terminal 2, start Claude Code through it (same for `claude -p` and `claude --resume`):
@@ -90,13 +98,13 @@ leaves your machine):
 ANTHROPIC_BASE_URL=http://127.0.0.1:8787 ANTHROPIC_CUSTOM_HEADERS="x-tokentrimmer-mode: balanced" claude
 ```
 
-A shell shortcut that starts the proxy in the background when needed (add to `~/.zshrc` or `~/.bashrc`,
-and change `~/tokentrimmer` to where you cloned it):
+A shell shortcut that starts the proxy in the background when needed. Install it once with
+`npm install -g tokentrimmer`, then add this to `~/.zshrc` or `~/.bashrc`:
 
 ```sh
 claude-trim() {
   curl -sf http://127.0.0.1:8787/health >/dev/null ||
-    (cd ~/tokentrimmer && nohup npm start >/tmp/tokentrimmer.log 2>&1 &)
+    (nohup tokentrimmer >/tmp/tokentrimmer.log 2>&1 &)
   until curl -sf http://127.0.0.1:8787/health >/dev/null; do sleep 0.2; done
   ANTHROPIC_BASE_URL=http://127.0.0.1:8787 claude "$@"
 }
@@ -123,7 +131,7 @@ client = anthropic.Anthropic(base_url="http://127.0.0.1:8787")
 const client = new Anthropic({ baseURL: 'http://127.0.0.1:8787' });
 ```
 
-Which mode: the default, `safe`, is lossless. `balanced` and `aggressive` (`TOKENTRIMMER_MODE=balanced npm start`)
+Which mode: the default, `safe`, is lossless. `balanced` and `aggressive` (`TOKENTRIMMER_MODE=balanced npx tokentrimmer`)
 drop content; see the accuracy results below before turning them on for coding work. `TOKENTRIMMER_MODE=balanced
 TOKENTRIMMER_STALE_AFTER=10 TOKENTRIMMER_RETRIEVE=1` (stale results need a lossy mode) saves the most on long sessions and lets Claude fetch shortened results back; it
 is experimental.
