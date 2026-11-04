@@ -1,6 +1,6 @@
 {
   "name": "tokentrimmer",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Cut Claude Code, Anthropic and OpenAI token usage and API cost: a local proxy that losslessly compresses tool output (JSON, logs, grep) before it reaches the API. Prompt-cache safe, zero dependencies.",
   "keywords": [
     "claude",
@@ -32,7 +32,7 @@
     "url": "https://github.com/an21an21/tokentrimmer/issues"
   },
   "bin": {
-    "tokentrimmer": "src/proxy.js"
+    "tokentrimmer": "src/cli.js"
   },
   "files": [
     "src/",
@@ -40,7 +40,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "start": "node src/proxy.js",
+    "start": "node src/cli.js",
     "test": "node --test test/*.test.js",
     "bench": "node bench.js",
     "verify": "node src/verify.js"

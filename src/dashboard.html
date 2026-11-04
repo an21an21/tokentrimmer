@@ -45,6 +45,20 @@ td.good { color: var(--accent); }
 td.bad { color: var(--warn); }
 .empty { color: var(--muted); padding: 8px 0; }
 code { font-family: var(--mono); background: var(--accent-soft); padding: 1px 5px; border-radius: 3px; }
+.lifetime { color: var(--muted); font-size: 13px; margin: -8px 0 20px; }
+.lifetime b { color: var(--fg); font: 600 13px var(--mono); }
+button.view { font: 12px var(--mono); color: var(--accent); background: none; border: 1px solid var(--line); border-radius: 4px; padding: 1px 8px; cursor: pointer; }
+button.view:hover, button.view:focus-visible { border-color: var(--accent); outline: none; }
+#inspect[hidden] { display: none; }
+.field { border-top: 1px solid var(--line); padding-top: 12px; margin-top: 12px; }
+.field .path { font: 12px var(--mono); color: var(--muted); margin-bottom: 6px; word-break: break-all; }
+.pair { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+@media (max-width: 720px) { .pair { grid-template-columns: 1fr; } }
+.pair h3 { font: 600 12px var(--sans); color: var(--muted); margin: 0 0 4px; text-transform: uppercase; letter-spacing: 0.06em; }
+.pair pre { margin: 0; max-height: 360px; overflow: auto; background: var(--bg); border: 1px solid var(--line); border-radius: 4px;
+  padding: 8px; font: 12px/1.45 var(--mono); white-space: pre-wrap; word-break: break-word; }
+.ref { background: var(--accent-soft); color: var(--accent); }
+.close { float: right; }
 </style>
 </head>
 <body>
@@ -60,6 +74,13 @@ code { font-family: var(--mono); background: var(--accent-soft); padding: 1px 5p
     <div class="kpi"><div class="label">Requests</div><div class="value" id="reqs">0</div></div>
     <div class="kpi"><div class="label">Est. tokens sent</div><div class="value" id="after">0</div></div>
   </div>
+  <div class="lifetime" id="lifetime"></div>
+
+  <section id="inspect" hidden>
+    <h2>Before and after <button class="view close" id="closeinspect">close</button></h2>
+    <div class="sub" id="inspecthead"></div>
+    <div id="fields"></div>
+  </section>
 
   <section>
     <h2>Where the savings come from</h2>
@@ -70,23 +91,60 @@ code { font-family: var(--mono); background: var(--accent-soft); padding: 1px 5p
     <h2>Recent requests</h2>
     <div class="scroll">
       <table>
-        <thead><tr><th>Time</th><th>Route</th><th class="num">Before</th><th class="num">After</th><th class="num">Saved</th><th class="num">Billed input</th><th>Check</th><th>Techniques</th></tr></thead>
+        <thead><tr><th>Time</th><th>Route</th><th class="num">Before</th><th class="num">After</th><th class="num">Saved</th><th class="num">Billed input</th><th>Check</th><th></th><th>Techniques</th></tr></thead>
         <tbody id="rows"></tbody>
       </table>
     </div>
-    <p class="sub">Token counts are estimates (about 4 characters per token). "Billed input" is the figure the API reported for the request it received. In dry-run mode, requests are measured but forwarded unchanged. "Check" shows the result of decoding each rewritten request back and comparing it with the original; "lossless" means every change was proven reversible, and a failed check sends your original request.</p>
+    <p class="sub">"view" shows what was rewritten in one of the last 10 rewritten requests (kept in memory only). Token counts are estimates (about 4 characters per token). "Billed input" is the figure the API reported for the request it received. In dry-run mode, requests are measured but forwarded unchanged. "Check" shows the result of decoding each rewritten request back and comparing it with the original; "lossless" means every change was proven reversible, and a failed check sends your original request.</p>
   </section>
 
   <section>
     <h2>Connect your app</h2>
-    <p class="sub">Anthropic SDK: <code>ANTHROPIC_BASE_URL=http://localhost:8787</code><br>
-    OpenAI SDK: <code>OPENAI_BASE_URL=http://localhost:8787/v1</code><br>
-    Per request: header <code>x-tokentrimmer-mode: safe|balanced|aggressive</code> or <code>x-tokentrimmer-dry-run: 1</code></p>
+    <p class="sub">Claude Code: <code>tokentrimmer claude</code> or <code>ANTHROPIC_BASE_URL=<span class="origin"></span> claude</code><br>
+    Anthropic SDK: <code>ANTHROPIC_BASE_URL=<span class="origin"></span></code><br>
+    OpenAI SDK: <code>OPENAI_BASE_URL=<span class="origin"></span>/v1</code><br>
+    Per request: header <code>x-tokentrimmer-mode: safe|balanced|aggressive</code> or <code>x-tokentrimmer-dry-run: 1</code><br>
+    Check the setup: <code>tokentrimmer doctor</code> · lifetime savings: <code>tokentrimmer savings</code></p>
   </section>
 </div>
 <script>
 const $ = (id) => document.getElementById(id);
 const fmt = (n) => Number(n).toLocaleString();
+// Everything shown comes from requests (tool output, web pages): always escape it.
+const esc = (v) => String(v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+for (const el of document.querySelectorAll('.origin')) el.textContent = location.origin;
+const REF = /^\[same as (?:message \d+(?: result \d+)? |a tool result in message \d+|)(?:lines \d+-\d+(?: above)?)?\]$|^\[tokentrimmer: .*\]$/;
+const SHOW = 20000;
+
+function pre(text) {
+  const t = text.length > SHOW ? text.slice(0, SHOW) : text;
+  const html = t.split('\n').map((l) => (REF.test(l) ? `<span class="ref">${esc(l)}</span>` : esc(l))).join('\n');
+  return `<pre>${html}${text.length > SHOW ? `\n… ${fmt(text.length - SHOW)} more characters` : ''}</pre>`;
+}
+
+async function inspect(id, label) {
+  const box = $('inspect');
+  box.hidden = false;
+  $('inspecthead').textContent = `Loading ${label}…`;
+  $('fields').innerHTML = '';
+  try {
+    const r = await fetch('/inspect?id=' + encodeURIComponent(id));
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || r.status);
+    $('inspecthead').textContent = `${label}: ${j.fields.length} rewritten ${j.fields.length === 1 ? 'string' : 'strings'}. Highlighted lines are references to text the model already has.`;
+    $('fields').innerHTML = j.fields.map((f) => `<div class="field"><div class="path">${esc(f.path)} · ${fmt(f.before.length)} → ${fmt(f.after.length)} characters</div>
+      <div class="pair"><div><h3>Original</h3>${pre(f.before)}</div><div><h3>Sent</h3>${pre(f.after)}</div></div></div>`).join('');
+  } catch (e) {
+    $('inspecthead').textContent = `Not available: ${e.message}`;
+  }
+  box.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+$('closeinspect').addEventListener('click', () => { $('inspect').hidden = true; });
+$('rows').addEventListener('click', (ev) => {
+  const b = ev.target.closest('button.view');
+  if (b) inspect(b.dataset.id, b.dataset.label);
+});
+
 async function tick() {
   try {
     const s = await (await fetch('/stats')).json();
@@ -97,21 +155,29 @@ async function tick() {
     const pill = $('modepill');
     pill.textContent = s.config.mode + (s.config.dryRun ? ' · dry run' : '');
     pill.className = 'pill' + (s.config.dryRun ? ' dry' : '');
-    $('uptime').textContent = 'up ' + Math.floor((Date.now() - s.startedAt) / 60000) + ' min';
+    $('uptime').textContent = `v${s.version || ''} · up ${Math.floor((Date.now() - s.startedAt) / 60000)} min`;
+    const L = s.lifetime;
+    $('lifetime').innerHTML = L && L.requests
+      ? `Since ${esc(L.since.slice(0, 10))}: <b>${fmt(L.saved)}</b> tokens saved over <b>${fmt(L.requests)}</b> requests (${L.before ? ((L.saved / L.before) * 100).toFixed(1) : 0}%). Above: this run only.`
+      : '';
 
     const techs = Object.entries(s.techniques).sort((a, b) => b[1] - a[1]);
     const max = techs.length ? techs[0][1] : 1;
     $('tech').innerHTML = techs.length
-      ? techs.map(([k, n]) => `<div>${k}</div><div class="bar"><i style="width:${(n / max) * 100}%"></i></div><div class="n">${n}</div>`).join('')
+      ? techs.map(([k, n]) => `<div>${esc(k)}</div><div class="bar"><i style="width:${(n / max) * 100}%"></i></div><div class="n">${fmt(n)}</div>`).join('')
       : '<div class="empty">No requests yet. Point your SDK at this proxy.</div>';
 
-    $('rows').innerHTML = s.recent.map((r) => `<tr>
-      <td>${new Date(r.time).toLocaleTimeString()}</td><td>${r.route}${r.dry ? ' (dry)' : ''}</td>
+    $('rows').innerHTML = s.recent.map((r) => {
+      const t = new Date(r.time).toLocaleTimeString();
+      return `<tr>
+      <td>${esc(t)}</td><td>${esc(r.route)}${r.dry ? ' (dry)' : ''}</td>
       <td class="num">${fmt(r.before)}</td><td class="num">${fmt(r.after)}</td>
       <td class="num good">${r.saved ? '-' + fmt(r.saved) : '0'}</td>
       <td class="num">${r.reportedInput == null ? '' : fmt(r.reportedInput)}</td>
-      <td class="${r.check && r.check.startsWith('FAILED') ? 'bad' : ''}">${r.check || ''}</td>
-      <td>${r.techniques.join(', ')}</td></tr>`).join('');
+      <td class="${r.check && r.check.startsWith('FAILED') ? 'bad' : ''}">${esc(r.check || '')}</td>
+      <td>${r.inspect ? `<button class="view" data-id="${esc(r.id)}" data-label="Request at ${esc(t)}">view</button>` : ''}</td>
+      <td>${esc(r.techniques.join(', '))}</td></tr>`;
+    }).join('');
   } catch (e) { /* proxy restarting */ }
 }
 tick(); setInterval(tick, 2000);

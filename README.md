@@ -76,82 +76,70 @@ with v0.1.1. Headroom's own retrieval was not tested with a model; its proxies a
 these runs. Method and full results: [Real sessions](#real-sessions) and [Proxy against proxy](#proxy-against-proxy).
 `compare/` reproduces every number.
 
-## Run
+## Quick start
 
 ```
-npx tokentrimmer
-# Anthropic SDK:  ANTHROPIC_BASE_URL=http://127.0.0.1:8787
-# OpenAI SDK:     OPENAI_BASE_URL=http://127.0.0.1:8787/v1
-# Dashboard:      http://127.0.0.1:8787/
+npm install -g tokentrimmer      # or prefix each command with npx
+tokentrimmer claude              # starts the proxy in the background and runs Claude Code through it
 ```
 
-Start with `DRY_RUN=1 npx tokentrimmer` first. Requests are measured and the dashboard
-shows what you would save, but the original request is forwarded unchanged.
+Everything after `claude` goes to Claude Code unchanged (`tokentrimmer claude --resume`, `tokentrimmer claude -p "…"`).
+Open http://127.0.0.1:8787/ to watch the savings. Try `--dry-run` first: requests are measured and the
+dashboard shows what you would save, but the original request is forwarded unchanged. Node 18+, no dependencies.
+
+## Commands
+
+| Command | What it does |
+|---|---|
+| `tokentrimmer` | Run the proxy in the foreground (Ctrl-C to stop) |
+| `tokentrimmer claude [args]` | Run Claude Code through the proxy, starting it in the background if it isn't running |
+| `tokentrimmer doctor` | Check the proxy, its mode, and how Claude Code is routed (exit code 0 ok, 1 warnings, 2 broken) |
+| `tokentrimmer savings` | Lifetime and daily savings, from `~/.tokentrimmer/stats.json`; works without a running proxy |
+| `tokentrimmer stop` | Stop a proxy that `tokentrimmer claude` started in the background |
+| `tokentrimmer --help` | All options |
+
+Options go before the command: `tokentrimmer --mode balanced claude`, `tokentrimmer --port 9000 --dry-run`.
+
+| Option | Environment variable | Default |
+|---|---|---|
+| `-p, --port <n>` | `PORT` | 8787 |
+| `--host <addr>` | `HOST` | 127.0.0.1 (loopback only; see Security) |
+| `-m, --mode <mode>` | `TOKENTRIMMER_MODE` | safe (`safe`, `balanced`, `aggressive`) |
+| `--dry-run` | `DRY_RUN=1` | off |
+| `--stale-after <n>` | `TOKENTRIMMER_STALE_AFTER` | off (e.g. `10`; ignored in safe mode) |
+| | `TOKENTRIMMER_STALE_CHARS` / `_STEP` | 1000 / 20 |
+| `--retrieve` | `TOKENTRIMMER_RETRIEVE=1` | off (adds the retrieval tool; Anthropic only) |
+| `--exclude-tools <a,b>` | `TOKENTRIMMER_EXCLUDE_TOOLS` | read, read_file, view, edit, multiedit, write, notebookedit, str_replace_editor, skill |
+| `--no-verify` | `TOKENTRIMMER_VERIFY=0` | the per-request decode check is on |
+| `--no-history` | `TOKENTRIMMER_HISTORY=0` | lifetime counts kept in `~/.tokentrimmer/` (`TOKENTRIMMER_HOME` moves it) |
+| `--no-inspect` | `TOKENTRIMMER_INSPECT=0` | the dashboard's before/after view is on (loopback only) |
+| | `ANTHROPIC_UPSTREAM` / `OPENAI_UPSTREAM` | https://api.anthropic.com / https://api.openai.com |
+
+Per request: header `x-tokentrimmer-mode: safe|balanced|aggressive` and `x-tokentrimmer-dry-run: 1`. These
+headers are not forwarded upstream. `POST /compress` with `{"text": "...", "mode": "balanced"}` returns compressed
+text for use outside the proxy, `GET /stats` the dashboard's numbers, `GET /health` the version and mode.
 
 ## Use with Claude
-
-Run it straight from npm (Node 18+, no dependencies):
-
-```
-npx tokentrimmer                 # safe (lossless) mode; leave this running
-```
-
-Or install it once, so it starts instantly and works offline:
-
-```
-npm install -g tokentrimmer
-tokentrimmer
-```
-
-From source: `git clone https://github.com/an21an21/tokentrimmer.git && cd tokentrimmer && npm start`.
 
 ### Claude Code in the terminal
 
 Works with both an API key and a Claude subscription login; the proxy forwards your auth headers unchanged.
 
-1. Terminal 1, start the proxy and leave it running:
+- **Easiest:** `tokentrimmer claude`. If a proxy is already running in another mode, `tokentrimmer --mode balanced
+  claude` uses that mode for this session only (through a request header) instead of restarting it.
+- **By hand:** run `tokentrimmer` in one terminal, then `ANTHROPIC_BASE_URL=http://127.0.0.1:8787 claude` in another.
+  For one session's mode, add `ANTHROPIC_CUSTOM_HEADERS="x-tokentrimmer-mode: balanced"`.
+- **Always:** add the variable to `~/.claude/settings.json`. Claude Code then cannot connect whenever the proxy is
+  not running, so remove it if you stop using TokenTrimmer:
 
-   ```
-   npx tokentrimmer
-   ```
+  ```json
+  { "env": { "ANTHROPIC_BASE_URL": "http://127.0.0.1:8787" } }
+  ```
 
-2. Terminal 2, start Claude Code through it (same for `claude -p` and `claude --resume`):
-
-   ```
-   ANTHROPIC_BASE_URL=http://127.0.0.1:8787 claude
-   ```
-
-3. Check that it is working: send a message, then open http://127.0.0.1:8787/ (the dashboard lists every
-   request with tokens before and after) or run `curl -s http://127.0.0.1:8787/stats`.
-   If Claude Code reports a connection error, the proxy is not running.
-
-Choose the mode for one session without restarting the proxy (the header is stripped before the request
-leaves your machine):
-
-```
-ANTHROPIC_BASE_URL=http://127.0.0.1:8787 ANTHROPIC_CUSTOM_HEADERS="x-tokentrimmer-mode: balanced" claude
-```
-
-A shell shortcut that starts the proxy in the background when needed. Install it once with
-`npm install -g tokentrimmer`, then add this to `~/.zshrc` or `~/.bashrc`:
-
-```sh
-claude-trim() {
-  curl -sf http://127.0.0.1:8787/health >/dev/null ||
-    (nohup tokentrimmer >/tmp/tokentrimmer.log 2>&1 &)
-  until curl -sf http://127.0.0.1:8787/health >/dev/null; do sleep 0.2; done
-  ANTHROPIC_BASE_URL=http://127.0.0.1:8787 claude "$@"
-}
-```
-
-Then run `claude-trim` instead of `claude`. Stop the background proxy with `lsof -ti tcp:8787 -sTCP:LISTEN | xargs kill`.
-
-To always use it, add the variable to `~/.claude/settings.json` instead. Claude Code then fails to connect
-whenever the proxy is not running, so remove it if you stop using TokenTrimmer:
-
-```json
-{ "env": { "ANTHROPIC_BASE_URL": "http://127.0.0.1:8787" } }
-```
+Check that it is working with `tokentrimmer doctor`, or send a message and open http://127.0.0.1:8787/: the
+dashboard lists every request with tokens before and after, and **view** shows exactly what was rewritten in it
+(original next to what was sent, references highlighted). Start new Claude Code sessions after changing the
+mode or upgrading, so the history the API sees stays consistent.
 
 ### Anthropic SDK
 
@@ -165,10 +153,10 @@ client = anthropic.Anthropic(base_url="http://127.0.0.1:8787")
 const client = new Anthropic({ baseURL: 'http://127.0.0.1:8787' });
 ```
 
-Which mode: the default, `safe`, is lossless. `balanced` and `aggressive` (`TOKENTRIMMER_MODE=balanced npx tokentrimmer`)
-drop content; see the accuracy results below before turning them on for coding work. `TOKENTRIMMER_MODE=balanced
-TOKENTRIMMER_STALE_AFTER=10 TOKENTRIMMER_RETRIEVE=1` (stale results need a lossy mode) saves the most on long sessions and lets Claude fetch shortened results back; it
-is experimental.
+Which mode: the default, `safe`, is lossless. `balanced` and `aggressive` (`tokentrimmer --mode balanced`) drop
+content; see the accuracy results below before turning them on for coding work. `tokentrimmer --mode balanced
+--stale-after 10 --retrieve` (stale results need a lossy mode) saves the most on long sessions and lets Claude fetch
+shortened results back; it is experimental.
 
 ## What it compresses
 
@@ -199,45 +187,27 @@ match text verbatim, but an identical repeated result is still replaced by a one
 reference. Override the list with `TOKENTRIMMER_EXCLUDE_TOOLS=name1,name2`. Compression is deterministic, so a repeated
 prefix stays identical between requests and provider prompt caching keeps working.
 
-## Config
-
-| Env var | Default |
-|---|---|
-| `PORT` | 8787 |
-| `HOST` | 127.0.0.1 (loopback only; see Security) |
-| `TOKENTRIMMER_MODE` | safe (`safe`, `balanced`, `aggressive`) |
-| `DRY_RUN` | off (`1` to measure only) |
-| `TOKENTRIMMER_VERIFY` | on (`0` to disable the runtime check) |
-| `TOKENTRIMMER_EXCLUDE_TOOLS` | read, read_file, view, edit, multiedit, write, notebookedit, str_replace_editor, skill |
-| `ANTHROPIC_UPSTREAM` | https://api.anthropic.com |
-| `OPENAI_UPSTREAM` | https://api.openai.com |
-| `TOKENTRIMMER_STALE_AFTER` | off (e.g. `10`; ignored in safe mode) |
-| `TOKENTRIMMER_STALE_CHARS` | 1000 |
-| `TOKENTRIMMER_STALE_STEP` | 20 |
-| `TOKENTRIMMER_RETRIEVE` | off (`1` to add the retrieval tool; Anthropic only) |
-
-Per request: header `x-tokentrimmer-mode: safe|balanced|aggressive` and
-`x-tokentrimmer-dry-run: 1`. These headers are not forwarded upstream.
-
-`POST /compress` with `{"text": "...", "mode": "balanced"}` returns compressed text
-for use outside the proxy. `GET /stats` returns the numbers the dashboard shows.
-
 ## Security
 
 TokenTrimmer sits between your app and the API, so it sees your API key and every request and response.
 What it does with them:
 
-- **Local only by default.** It listens on `127.0.0.1`. The dashboard, `/stats` and the proxy itself have no
-  authentication, so set `HOST` to another address only on a network you trust.
+- **Local only by default.** It listens on `127.0.0.1`. The dashboard, `/stats`, `/inspect` and the proxy itself
+  have no authentication, so set `--host` to another address only on a network you trust (the before/after view
+  then stays off unless you set `TOKENTRIMMER_INSPECT=1`).
 - **Forwards only to the configured upstream.** Requests go to `ANTHROPIC_UPSTREAM` / `OPENAI_UPSTREAM`
   (the official APIs by default), with your auth headers passed through unchanged. Pointing an upstream
   somewhere else sends your key there too.
-- **No disk, no logs, no telemetry.** Nothing is written to disk; the console shows only the startup lines;
-  there are no other network calls.
+- **No telemetry, no content on disk.** There are no network calls besides the upstream. The command line keeps
+  lifetime savings in `~/.tokentrimmer/stats.json` as counts only (requests, token estimates, technique names,
+  per day; `--no-history` turns it off), and a proxy started by `tokentrimmer claude` writes its startup lines and
+  errors to `~/.tokentrimmer/proxy-<port>.log`. Both files are readable only by you. Used as a library
+  (`createServer`), nothing is written.
 - **In memory, until restart:** `/stats` keeps the last 50 requests as numbers only (sizes, modes, techniques,
-  status), no content. With `TOKENTRIMMER_RETRIEVE=1` it also keeps the original text of shortened tool results
-  while answering a request, and the last 500 retrieval exchanges (conversation content) so replayed turns can
-  be restored.
+  status). The dashboard's **view** keeps the messages of the last 10 rewritten requests, original and sent, so
+  you can see what changed; it is on only when listening on loopback, and `--no-inspect` turns it off. With
+  `--retrieve` it also keeps the original text of shortened tool results while answering a request, and the last
+  500 retrieval exchanges (conversation content) so replayed turns can be restored.
 - **No dependencies.** Only Node built-ins, so there is no third-party code in the request path.
 - **The benchmark scripts are separate.** `compare/real/` reads your Claude Code sessions from
   `~/.claude/projects` and writes them to the git-ignored `compare/real/out/`. `eval_accuracy.py` sends session
