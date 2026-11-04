@@ -6,7 +6,8 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { execFileSync, spawnSync } = require('node:child_process');
-const { compressRequest } = require('../src/messages');
+const { compressRequest, toolTexts } = require('../src/messages');
+const formats = require('../src/formats');
 const { verifyRequest } = require('../src/verify');
 const { createServer } = require('../src/proxy');
 const payloads = require('../compare/payloads');
@@ -204,7 +205,7 @@ const BLOCK_TOOLS = ['Bash', 'browser_find', 'Read', 'mcp__fs__read_file', 'run_
 function rndLine(r) {
   const t = r();
   if (t < 0.15) return pickFrom(r, NASTY).replace(/[\n\r\u2028]/g, ' ');
-  if (t < 0.2) return pickFrom(r, ['', '[tokentrimmer: lines 1-5 of the tool result in message 1 repeated here]', '[tokentrimmer: lines x', '  - generic [ref=e12]:']);
+  if (t < 0.2) return pickFrom(r, ['', '[same as message 1 lines 1-5]', '[same as message 1 result 2 lines 1-5]', '[same as message x', '  - generic [ref=e12]:']);
   return `  - item ${Math.floor(r() * 1e4)} ${rndString(r)} ${'abcdefghij'.repeat(1 + Math.floor(r() * 4))}`;
 }
 // A conversation whose tool results reuse runs of lines from earlier results, sometimes with an edited line.
@@ -253,7 +254,8 @@ test('fuzz: repeated line blocks decode exactly, point at text the model can see
       const out = compressRequest(body, openai ? 'openai' : 'anthropic', opts);
       const v = verifyRequest(body, out.body, opts);
       assert.ok(v.ok, `case ${i} ${mode}: ${JSON.stringify(v.fields.filter((f) => f.status === 'FAILED')).slice(0, 600)}`);
-      for (const f of v.fields) if (f.techniques.includes('dedupe-block')) assert.strictEqual(f.status, 'exact');
+      // References may sit inside a lossless compressed form, so 'exact' is not required, only lossless.
+      for (const f of v.fields) if (f.techniques.includes('dedupe-block') && mode === 'safe') assert.ok(['exact', 'whitespace-normalized', 'equivalent'].includes(f.status), f.status);
       if (mode === 'safe') {
         assert.strictEqual(v.lossless, true);
         blocks += out.techniques['dedupe-block'] || 0;
@@ -262,6 +264,76 @@ test('fuzz: repeated line blocks decode exactly, point at text the model can see
     }
   }
   assert.ok(blocks > 300, `block dedupe should trigger often on generated conversations, got ${blocks}`);
+});
+
+// A browser accessibility-tree style result where the same branch repeats for every match.
+function treeResult(matches, salt) {
+  const out = [`### Result`, `Found ${matches} matches for /Fare|Select/i:`];
+  for (let i = 0; i < matches; i++) {
+    out.push('', '- generic [ref=e4]:', '  - generic [ref=e12]:', '    - generic [ref=e16]:  container for the fare selection panel');
+    out.push(`      - button "Select fare ${i} ${salt}" [ref=e${100 + i}]: Select this fare and continue to passenger details`);
+    out.push('----');
+  }
+  return out.join('\n');
+}
+
+test('repeated line blocks: lines repeated within one result become "same as lines above" references', () => {
+  const text = treeResult(6, 'a');
+  const body = { messages: [
+    { role: 'user', content: 'find fares' },
+    { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'browser_find', input: {} }] },
+    { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: text }] },
+  ] };
+  for (const mode of ['safe', 'balanced', 'aggressive']) {
+    const out = compressRequest(body, 'anthropic', { mode }).body;
+    const sent = out.messages[2].content[0].content;
+    assert.match(sent, /^\[same as lines \d+-\d+ above\]$/m, mode);
+    assert.ok(sent.length < text.length * 0.8, `${mode}: ${sent.length} vs ${text.length}`);
+    assert.strictEqual(formats.decodeBlockRefs(sent, () => null), text, mode);
+    const v = verifyRequest(body, out, { mode });
+    assert.ok(v.ok && v.lossless, `${mode}: ${JSON.stringify(v.counts)}`);
+  }
+});
+
+test('repeated line blocks: references into a result that itself has references resolve to verbatim lines; tampering is caught', () => {
+  const body = { messages: [{ role: 'user', content: 'find fares' }] };
+  for (let n = 0; n < 4; n++) {
+    body.messages.push({ role: 'assistant', content: [{ type: 'tool_use', id: `t${n}`, name: 'browser_find', input: {} }] });
+    body.messages.push({ role: 'user', content: [{ type: 'tool_result', tool_use_id: `t${n}`, content: treeResult(3 + n, `s${n}`) }] });
+  }
+  const opts = { mode: 'safe' };
+  const out = compressRequest(body, 'anthropic', opts).body;
+  const sentTexts = out.messages.map((m) => toolTexts(m)[0]);
+  const refs = sentTexts.join('\n').match(/^\[same as message \d+ lines \d+-\d+\]$/gm) || [];
+  assert.ok(refs.length > 0, 'later results should point at earlier ones');
+  // Every reference to another message lands on lines that are not references themselves.
+  for (const r of refs) {
+    const [, m, a, b] = /message (\d+) lines (\d+)-(\d+)/.exec(r).map(Number);
+    for (const l of sentTexts[m].split('\n').slice(a - 1, b)) assert.ok(!formats.isRefLine(l), `${r} -> ${l}`);
+  }
+  const v = verifyRequest(body, out, opts);
+  assert.ok(v.ok && v.lossless, JSON.stringify(v.counts));
+  // Corrupt a line that a later result points at: the verifier must notice.
+  const [, m, a] = /message (\d+) lines (\d+)-/.exec(refs[0]).map(Number);
+  const tampered = JSON.parse(JSON.stringify(out));
+  const holder = tampered.messages[m].content[0];
+  const lines = holder.content.split('\n');
+  lines[a - 1] += ' (changed)';
+  holder.content = lines.join('\n');
+  assert.strictEqual(verifyRequest(body, tampered, opts).ok, false);
+});
+
+test('repeated line blocks: original text with lines that look like references is never given references', () => {
+  const text = `${treeResult(4, 'x')}\n[same as lines 1-2 above]`;
+  const body = { messages: [
+    { role: 'user', content: 'q' },
+    { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'browser_find', input: {} }] },
+    { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: text }] },
+  ] };
+  const out = compressRequest(body, 'anthropic', { mode: 'safe' }).body;
+  const sent = out.messages[2].content[0].content;
+  assert.strictEqual((sent.match(/\[same as /g) || []).length, 1, 'only the original look-alike line');
+  assert.ok(verifyRequest(body, out, { mode: 'safe' }).ok);
 });
 
 test('repeated line blocks: excluded tools are never rewritten but serve as sources; corruption is caught', () => {
@@ -284,7 +356,7 @@ test('repeated line blocks: excluded tools are never rewritten but serve as sour
   const opts = { mode: 'safe', keepRecent: 2 };
   const out = compressRequest(body, 'anthropic', opts).body;
   const bash = out.messages[4].content[0].content;
-  assert.match(bash, /^\$ cat module\.js\n\[tokentrimmer: lines 1-40 of the tool result in message 2 repeated here\]\ntest 0 passed/);
+  assert.match(bash, /^\$ cat module\.js\n\[same as message 2 lines 1-40\]\ntest 0 passed/);
   assert.strictEqual(out.messages[4].content[1].content, `${file}\nextra`, 'an excluded tool result stays verbatim');
   assert.strictEqual(verifyRequest(body, out, opts).lossless, true);
 
@@ -356,7 +428,8 @@ test('stale results: the cached prefix only breaks when the stale cutoff moves',
           assert.deepStrictEqual(out[i], prev.out[i], `conversation ${n}: message ${i} changed between requests ${t - 1} and ${t} without a cutoff move`);
         }
       }
-      assert.ok(verifyRequest(body, { messages: out }, opts).ok);
+      const v = verifyRequest(body, { messages: out }, opts);
+      assert.ok(v.ok, `conversation ${n}, request ${t}: ${JSON.stringify(v.fields.filter((f) => f.status === 'FAILED')).slice(0, 600)}`);
       prev = { out, cut };
     }
   }

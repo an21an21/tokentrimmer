@@ -37,8 +37,9 @@ for over and over. TokenTrimmer rewrites tool results into a shorter form as eac
 - **You can see what it does.** A local dashboard shows tokens before and after for every request, and dry-run
   mode measures savings without changing anything.
 
-What to expect: on real Claude Code sessions, safe mode saved about 3% of input tokens with no loss in answer
-accuracy, and the lossy modes saved 10–27% at a measurable accuracy cost (see [Real sessions](#real-sessions)).
+What to expect: on real Claude Code sessions, safe mode saved about 7% of input tokens (5% of the bill with prompt
+caching) with no loss in answer accuracy, and the lossy modes saved 14–30% at a measurable accuracy cost (see
+[Real sessions](#real-sessions)).
 Savings depend heavily on how much repetitive tool output your sessions have; run dry-run mode first to see
 your own number.
 
@@ -147,8 +148,8 @@ is experimental.
 | Log lines sharing a template: templates listed once, each line written as `~N|var|var`, original order kept | safe | yes |
 | Tables nested inside a larger JSON object keep a JSON form (`{"_table":{cols,rows}}`) | safe | yes |
 | grep-style `path/file:line:text` output: each directory written once as an `@ dir/` header | safe | yes |
-| Identical tool results sent again later become a one-line reference | safe | yes |
-| A run of 4+ lines already shown verbatim in an earlier tool result becomes `[tokentrimmer: lines A-B of the tool result in message M repeated here]` | safe | yes |
+| Identical tool results sent again later become `[same as a tool result in message M]` | safe | yes |
+| A line or run of lines the model already has verbatim becomes a short reference: `[same as message M lines A-B]` (an earlier tool result, as sent) or `[same as lines A-B above]` (earlier in the same result). Only used when the run is at least 60 characters and twice as long as the reference | safe | yes |
 | Drop null / empty JSON fields and all-empty table columns | balanced | no |
 | Collapse runs of similar log lines (first and last kept, count shown) | balanced | no |
 | Cap huge outputs: head and tail kept, middle omitted and labelled | aggressive | no |
@@ -260,18 +261,20 @@ message list. Reproduce with `compare/export.js` then `compare/run_headroom.py`.
 |---|---|---|---|
 | JSON API response, 150 records | 74% | 78% | 72% |
 | Mixed-shape JSON events | 73% | 74% | 73% |
-| grep results, 500 hits | 20% | 20% | 20% |
+| grep results, 500 hits | 21% | 21% | 20% |
 | Server log, retry storm | 61% | 98% | 10% |
 | JavaScript source file | 6% | 6% | 0% |
-| Python source with comments | 0% | 0% | 0% |
-| Verbose prose | 8% | 8% | 0% |
+| Python source with comments | 66% | 66% | 0% |
+| Verbose prose | 64% | 64% | 0% |
 | Agent conversation, 5 tool results | 59% | 65% | 17% |
-| Total | 44% | 50% | 20% |
+| Total | 51% | 57% | 20% |
 
 How to read this:
 - Safe mode is the like-for-like column: Headroom's output on JSON, logs and grep kept every
   row. Safe mode is verified lossless by decoder round-trip tests (`src/formats.js`).
 - Balanced and aggressive win by omitting content and are not comparable.
+- The Python and prose payloads are one template repeated 60 times, which line references collapse. Real files
+  rarely repeat like that, so those two rows overstate what to expect.
 - The counter is characters divided by four. Real tokenizers may count digits, punctuation and
   CSV-style rows differently, so real savings can be lower or higher. Use dry run: the
   dashboard's "billed input" column is the real figure.
@@ -306,18 +309,23 @@ tokens counted with tiktoken o200k_base, Headroom 0.42.0 in library mode. Saving
 
 | | Final request | Cache-weighted cost, whole session |
 |---|---|---|
-| TokenTrimmer safe | 3.3% | 2.7% |
-| TokenTrimmer aggressive | 10.8% | 9.2% |
-| TokenTrimmer balanced + `TOKENTRIMMER_STALE_AFTER=10` | 27.4% | 14.7% |
-| TokenTrimmer balanced + stale 10 + `TOKENTRIMMER_RETRIEVE=1` | 26.5% | 13.6% (before retrieval round trips) |
-| Headroom library mode (default, coding, general, agent-90 profiles alike) | 1.0% | 1.0% |
+| TokenTrimmer safe | 6.9% | 5.3% |
+| TokenTrimmer aggressive | 13.9% | 11.6% |
+| TokenTrimmer balanced + `TOKENTRIMMER_STALE_AFTER=10` | 29.4% | 16.4% |
+| TokenTrimmer balanced + stale 10 + `TOKENTRIMMER_RETRIEVE=1` | 28.7% | 15.8% (before retrieval round trips) |
+| Headroom library mode, default and coding profiles | 1.2% | 1.3% |
+| Headroom library mode, agent-90 profile | 5.6% | not measured |
+
+Most of safe mode's saving on these sessions comes from line references: browser page trees and command output
+repeat the same lines within a result and across results, and a 12-token reference replaces each run.
 
 Cache-weighted cost replays each session request by request, priced as prompt caching bills it (0.1x for the prefix
 shared with the previous request, 1.25x for the rest). Rewriting old messages re-bills everything after them, which is
 why stale mode's saving roughly halves there.
 
 Accuracy: 140 questions over 8 of the sessions, each quoting a line from an old tool result and asking for the line
-after it (exact match), answered by Claude Opus 5.5 through `claude -p` with each compressed conversation:
+after it (exact match), answered by Claude Opus 5.5 through `claude -p` with each compressed conversation. Safe mode
+was measured on the current version; the other TokenTrimmer rows on v0.1.1, which used fewer, longer references:
 
 | | Correct | Answered UNKNOWN | Wrong guess |
 |---|---|---|---|
@@ -328,7 +336,9 @@ after it (exact match), answered by Claude Opus 5.5 through `claude -p` with eac
 | TokenTrimmer balanced + stale 10 + retrieval | 99% | 0 | 1 |
 | Headroom default | 95% | 3 | 4 |
 
-Safe mode matched the original, including answers that had to be found by following a repeated-block reference.
+Safe mode matched the original. Because few of those 140 answers sit behind a reference, 38 more questions were
+added whose answer, in the safe output, is hidden behind a `[same as …]` reference (both kinds); the model answered
+38/38, the same as on the original conversation.
 Stale mode alone loses most old detail. With retrieval the model read back what it needed and recovered almost
 all of it, but every retrieval is an extra round trip that re-reads the context: in this test, where most
 questions targeted cut content, stale + retrieval cost about 1.7x as much as sending the original. It pays off
@@ -349,16 +359,19 @@ send to the API. Tokens include any retrieval tool a proxy adds.
 | Headroom, `cache` (default) | 1.5% | 0.2% | 104 ms |
 | Headroom, `--lossless` | 1.6% | 0.9% | 66 ms |
 | Headroom, `token` | 5.8% | **-11.4%** (costs more than the original) | 914 ms |
-| TokenTrimmer, safe (default) | 3.7% | 2.6% | 12 ms |
-| TokenTrimmer, aggressive | 11.2% | 9.2% | 13 ms |
-| TokenTrimmer, balanced + stale 10 | 27.8% | 14.6% | 13 ms |
-| TokenTrimmer, balanced + stale 10 + retrieval | 26.9% | 13.5% | 15 ms |
+| TokenTrimmer, safe (default) | 7.2% | 5.3% | 9 ms |
+| TokenTrimmer, aggressive | 14.3% | 11.6% | 9 ms |
+| TokenTrimmer, balanced + stale 10 | 29.8% | 16.4% | 9 ms |
+| TokenTrimmer, balanced + stale 10 + retrieval | 28.8% | 15.3% | 10 ms |
+
+Safe mode is lossless (every request verified) and still smaller than Headroom's `token` mode, which rewrites
+content.
 
 Headroom's `token` mode re-compresses earlier turns as the conversation grows, so the cached prefix keeps
 changing and most of each request is billed at the full rate. Headroom's `cache` mode avoids that but compresses
 little of these sessions. Latency is the proxy's own time per request on an Apple Silicon laptop, with a
 local upstream that answers instantly. The slowest single request took 17 s through Headroom `token` mode and
-0.4 s through TokenTrimmer. Where proxies add `cache_control` breakpoints they are ignored in the cost
+0.13 s through TokenTrimmer. Where proxies add `cache_control` breakpoints they are ignored in the cost
 column, because they mark the cache rather than being part of it.
 
 Not measured here: Headroom's own retrieval (CCR) under a real model. In these runs its proxies added at most

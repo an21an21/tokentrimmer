@@ -89,7 +89,7 @@ test('identical tool results are deduplicated', () => {
   const body = { messages: [mk('a'), { role: 'assistant', content: 'ok' }, mk('b'), { role: 'assistant', content: 'ok' }, { role: 'user', content: 'go' }] };
   const r = compressRequest(body, 'anthropic', { mode: 'safe', keepRecent: 2 });
   assert.ok(r.techniques['dedupe-identical']);
-  assert.ok(r.body.messages[2].content[0].content.startsWith('[tokentrimmer: identical'));
+  assert.ok(r.body.messages[2].content[0].content.startsWith('[same as a tool result in message'));
 });
 
 test('openai request: tool messages shrink', () => {
@@ -198,7 +198,7 @@ test('tool exclusion: an identical repeated Read is still deduplicated', () => {
   const body = { messages: [{ role: 'user', content: 'go' }, ...mk('a'), ...mk('b'), { role: 'user', content: 'done' }] };
   const r = compressRequest(body, 'anthropic', { mode: 'safe', keepRecent: 2 });
   assert.strictEqual(r.body.messages[2].content[0].content, file);
-  assert.ok(r.body.messages[4].content[0].content.startsWith('[tokentrimmer: identical'));
+  assert.ok(r.body.messages[4].content[0].content.startsWith('[same as a tool result in message'));
 });
 
 test('tool exclusion works for MCP-prefixed names and for OpenAI tool calls', () => {

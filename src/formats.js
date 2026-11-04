@@ -275,36 +275,57 @@ function decodeLogTemplates(text) {
 
 // ---------- repeated line blocks ----------
 
-// A run of lines already shown verbatim in an earlier tool result is replaced by one reference line.
-// `message` is the index in the request's messages array; `result` (1-based) is only written when that
-// message holds more than one tool-result text. Lossless: decodeBlockRefs restores the exact text.
-const BLOCK_REF = /^\[tokentrimmer: lines (\d+)-(\d+) of (?:tool result (\d+)|the tool result) in message (\d+) repeated here\]$/;
+// A run of lines the model already has, verbatim, in an earlier tool result is replaced by one short
+// reference line, e.g. "[same as message 175 lines 16-19]". `message` is the index in the request's
+// messages array; `result` (1-based) is only written when that message holds more than one tool-result
+// text. Line numbers count lines of that result *as sent*, which is what the model reads. Lossless:
+// decodeBlockRefs against the sent request restores the exact text.
+const BLOCK_REF = /^\[same as message (\d+)(?: result (\d+))? lines (\d+)-(\d+)\]$/;
 
 function blockRef(from, to, message, result) {
-  const where = result ? `tool result ${result}` : 'the tool result';
-  return `[tokentrimmer: lines ${from}-${to} of ${where} in message ${message} repeated here]`;
+  return `[same as message ${message}${result ? ` result ${result}` : ''} lines ${from}-${to}]`;
 }
+
+// A run repeating lines earlier in the same tool result: "[same as lines 3-5 above]", counting lines of
+// this result as sent.
+const LOCAL_REF = /^\[same as lines (\d+)-(\d+) above\]$/;
+const localRef = (from, to) => `[same as lines ${from}-${to} above]`;
+const isRefLine = (l) => BLOCK_REF.test(l) || LOCAL_REF.test(l);
+
+// An identical repeated tool result becomes one line naming the message that already holds it.
+const IDENTICAL_REF = /^\[same as a tool result in message (\d+)\]$/;
+const identicalRef = (message) => `[same as a tool result in message ${message}]`;
 
 function hasBlockRefs(text) {
-  return text.split('\n').some((l) => BLOCK_REF.test(l));
+  return text.split('\n').some(isRefLine);
 }
 
-// getText(message, result) returns the referenced original text (result is 1-based, defaults to 1).
+// getText(message, result) returns the referenced text as sent (result is 1-based, defaults to 1).
 function decodeBlockRefs(text, getText) {
   const out = [];
-  for (const l of text.split('\n')) {
+  const sent = text.split('\n');
+  sent.forEach((l, at) => {
+    const local = LOCAL_REF.exec(l);
+    if (local) {
+      const from = Number(local[1]), to = Number(local[2]);
+      if (from < 1 || to < from || to > at) throw new Error(`reference to lines not above it: ${l}`);
+      const lines = sent.slice(from - 1, to);
+      if (lines.some(isRefLine)) throw new Error(`reference to a reference line: ${l}`);
+      out.push(...lines);
+      return;
+    }
     const m = BLOCK_REF.exec(l);
     if (!m) {
       out.push(l);
-      continue;
+      return;
     }
-    const src = getText(Number(m[4]), m[3] ? Number(m[3]) : 1);
+    const src = getText(Number(m[1]), m[2] ? Number(m[2]) : 1);
     if (typeof src !== 'string') throw new Error(`block reference to a missing tool result: ${l}`);
     const lines = src.split('\n');
-    const from = Number(m[1]), to = Number(m[2]);
+    const from = Number(m[3]), to = Number(m[4]);
     if (from < 1 || to < from || to > lines.length) throw new Error(`block reference out of range: ${l}`);
     out.push(...lines.slice(from - 1, to));
-  }
+  });
   return out.join('\n');
 }
 
@@ -333,6 +354,6 @@ function splitRetrieveNote(text) {
 module.exports = {
   encCell, splitCells, parseCell, encodeTable, encodeGroups, decodeTables, decodeJSONOutput, expand,
   templateLogs, decodeLogTemplates, ungroupGrep, STRIPPED_ROW,
-  BLOCK_REF, blockRef, hasBlockRefs, decodeBlockRefs,
+  BLOCK_REF, blockRef, LOCAL_REF, localRef, isRefLine, hasBlockRefs, decodeBlockRefs, IDENTICAL_REF, identicalRef,
   RETRIEVE_TOOL, retrieveId, retrieveNote, splitRetrieveNote,
 };

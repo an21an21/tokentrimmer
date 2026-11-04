@@ -14,7 +14,7 @@ const formats = require('./formats');
 const { toolTexts, staleOptions } = require('./messages');
 
 const LOSSY = new Set(['json-drop-empty', 'log-collapse', 'cap-large-output']);
-const DEDUPE_REF = /^\[tokentrimmer: identical to the tool result in message (\d+)\]$/;
+const DEDUPE_REF = formats.IDENTICAL_REF;
 
 function containsString(node, str) {
   if (typeof node === 'string') return node === str;
@@ -43,15 +43,17 @@ function classify(orig, comp, originalBody, compressedBody, opts) {
       : { status: 'FAILED', techniques: ['dedupe-identical'], reason: 'referenced message does not contain this text' };
   }
   if (formats.hasBlockRefs(comp) && !formats.hasBlockRefs(orig)) {
-    // Decode against the original (nothing lost) and against the compressed body (the referenced
-    // lines are really in front of the model, unchanged).
+    // References point at lines as sent, so decode against the compressed body: an exact match proves
+    // both that nothing was lost and that the referenced lines really are in front of the model.
     const t = ['dedupe-block'];
     try {
-      for (const body of [originalBody, compressedBody]) {
-        const decoded = formats.decodeBlockRefs(comp, (m, k) => toolTexts(body.messages[m])[k - 1]);
-        if (decoded !== orig) return { status: 'FAILED', techniques: t, reason: 'referenced lines differ from the original text' };
-      }
-      return { status: 'exact', techniques: t };
+      const decoded = formats.decodeBlockRefs(comp, (m, k) => toolTexts(compressedBody.messages[m])[k - 1]);
+      if (decoded === orig) return { status: 'exact', techniques: t };
+      // References inside a compressed form: what they expand to must be what the compressor produces.
+      if (formats.hasBlockRefs(decoded)) return { status: 'FAILED', techniques: t, reason: 'a reference points at another reference' };
+      const inner = classify(orig, decoded, originalBody, compressedBody, opts);
+      if (inner.status === 'FAILED') return { ...inner, reason: `after expanding references: ${inner.reason}` };
+      return { ...inner, techniques: [...inner.techniques, ...t] };
     } catch (e) {
       return { status: 'FAILED', techniques: t, reason: `decode error: ${e.message}` };
     }

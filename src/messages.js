@@ -11,10 +11,13 @@ const formats = require('./formats');
 
 const DEDUPE_MIN_CHARS = 400;
 const LOSSY = new Set(['json-drop-empty', 'log-collapse', 'cap-large-output']);
-// Repeated line blocks: a run must span at least BLOCK_WINDOW lines and BLOCK_MIN_CHARS characters
-// to be worth a reference line.
-const BLOCK_WINDOW = 4;
-const BLOCK_MIN_CHARS = 100; // tuned on real sessions via compare/real (opts.blockWindow / opts.blockMinChars override)
+// Repeated line blocks: a run must span at least BLOCK_WINDOW lines and BLOCK_MIN_CHARS characters, and be
+// BLOCK_RATIO times longer than the reference replacing it. Tuned on real sessions (compare/real): with
+// short references even a single long repeated line pays off.
+const BLOCK_WINDOW = 1;
+const BLOCK_MIN_CHARS = 60; // tuned on real sessions via compare/real (opts.blockWindow / opts.blockMinChars override)
+const MAX_SITES = 16; // earlier positions remembered per repeated window
+const BLOCK_RATIO = 2; // the run must be at least this many times longer than its reference line
 
 // Tools whose output is file content the model may later quote back exactly (edit tools match
 // text verbatim). Their results are never rewritten, but identical repeats are still deduplicated.
@@ -40,6 +43,7 @@ function makeContext(opts) {
     // Retrieval: id -> original text of every tool result that lost content (opts.retrieve).
     store: new Map(),
     blockWindow: opts.blockWindow || BLOCK_WINDOW, blockMinChars: opts.blockMinChars ?? BLOCK_MIN_CHARS,
+    blockRatio: opts.blockRatio ?? BLOCK_RATIO,
   };
 }
 
@@ -64,43 +68,83 @@ function note(ctx, list) {
 
 const windowKey = (lines, i, w) => crypto.createHash('sha1').update(lines.slice(i, i + w).join('\n')).digest('base64');
 
-// Remember a tool result that is sent unchanged, so later results can point at its lines.
-function indexSource(ctx, text, msgIndex, k) {
-  const lines = text.split('\n');
+// Remember a tool result as it is sent, so later results can point at its lines. Line numbers are
+// those of the sent text (what the model reads). Lines that are themselves references are never
+// pointed at, so a reference always resolves to text the model has verbatim.
+function indexSource(ctx, sent, msgIndex, k) {
+  const lines = sent.split('\n');
   if (lines.length < ctx.blockWindow) return;
   const id = `${msgIndex}:${k}`;
   ctx.sources.set(id, lines);
+  const isRef = lines.map(formats.isRefLine);
+  let refsAhead = 0; // reference lines inside the current window
+  for (let i = 0; i < ctx.blockWindow - 1 && i < lines.length; i++) refsAhead += isRef[i];
   for (let i = 0; i + ctx.blockWindow <= lines.length; i++) {
-    const key = windowKey(lines, i, ctx.blockWindow);
-    if (!ctx.blocks.has(key)) ctx.blocks.set(key, { id, msgIndex, k, line: i });
+    refsAhead += isRef[i + ctx.blockWindow - 1];
+    if (!refsAhead) {
+      const key = windowKey(lines, i, ctx.blockWindow);
+      const at = ctx.blocks.get(key);
+      const hit = { id, msgIndex, k, line: i };
+      if (!at) ctx.blocks.set(key, [hit]);
+      else if (at.length < MAX_SITES) at.push(hit);
+    }
+    refsAhead -= isRef[i];
   }
 }
 
-// Replace runs of lines already sent verbatim earlier with one reference line each. Returns null
-// when nothing qualifies. The first earlier occurrence is always used, so output is deterministic.
+// Replace runs of lines the model already has verbatim with one reference line each: to an earlier tool
+// result ("[same as message M lines A-B]") or to lines above in this one ("[same as lines A-B above]").
+// Returns null when nothing qualifies. Sites are tried in send order and only a strictly longer run wins,
+// so the output is deterministic and depends only on this text and earlier messages.
 function dedupeBlocks(text, ctx) {
-  if (!ctx.blocks.size || formats.hasBlockRefs(text)) return null;
+  const w = ctx.blockWindow;
   const lines = text.split('\n');
-  if (lines.length < ctx.blockWindow) return null;
-  const out = [];
+  if (lines.length < w + 1 && !ctx.blocks.size) return null;
+  const out = []; // lines as sent
+  const local = new Map(); // window key -> sites in `out` (verbatim lines only)
+  let verbatimRun = 0; // consecutive verbatim lines at the end of `out`
   let replaced = false;
+  const run = (src, from, i) => {
+    let n = 0;
+    let chars = 0;
+    while (i + n < lines.length && from + n < src.length && lines[i + n] === src[from + n] && !formats.isRefLine(src[from + n])) {
+      chars += lines[i + n++].length + 1;
+    }
+    return [n, chars];
+  };
   let i = 0;
   while (i < lines.length) {
-    const hit = i + ctx.blockWindow <= lines.length && ctx.blocks.get(windowKey(lines, i, ctx.blockWindow));
-    if (hit) {
-      const src = ctx.sources.get(hit.id);
-      let n = 0;
-      let chars = 0;
-      while (i + n < lines.length && hit.line + n < src.length && lines[i + n] === src[hit.line + n]) chars += lines[i + n++].length + 1;
-      if (n >= ctx.blockWindow && chars >= ctx.blockMinChars) {
-        const result = ctx.resultCounts.get(hit.msgIndex) > 1 ? hit.k : 0;
-        out.push(formats.blockRef(hit.line + 1, hit.line + n, hit.msgIndex, result));
-        replaced = true;
-        i += n;
-        continue;
+    let best = null;
+    if (i + w <= lines.length) {
+      const key = windowKey(lines, i, w);
+      for (const site of ctx.blocks.get(key) || []) {
+        const [n, chars] = run(ctx.sources.get(site.id), site.line, i);
+        if (!best || chars > best.chars) {
+          const ref = formats.blockRef(site.line + 1, site.line + n, site.msgIndex, ctx.resultCounts.get(site.msgIndex) > 1 ? site.k : 0);
+          best = { n, chars, ref };
+        }
+      }
+      for (const at of local.get(key) || []) {
+        const [n, chars] = run(out, at, i);
+        if (!best || chars > best.chars) best = { n, chars, ref: formats.localRef(at + 1, at + n) };
       }
     }
+    // Only worth it when the run is clearly longer than the reference that replaces it.
+    if (best && best.n >= w && best.chars >= ctx.blockMinChars && best.chars >= best.ref.length * ctx.blockRatio) {
+      out.push(best.ref);
+      verbatimRun = 0;
+      replaced = true;
+      i += best.n;
+      continue;
+    }
     out.push(lines[i++]);
+    if (++verbatimRun >= w) {
+      const at = out.length - w;
+      const key = windowKey(out, at, w);
+      const sites = local.get(key);
+      if (!sites) local.set(key, [at]);
+      else if (sites.length < MAX_SITES) sites.push(at);
+    }
   }
   return replaced ? out.join('\n') : null;
 }
@@ -133,28 +177,45 @@ function shrinkToolText(text, ctx, msgIndex, excluded, k, stale) {
     if (ctx.seen.has(hash)) {
       note(ctx, ['dedupe-identical']);
       ctx.fieldsChanged++;
-      return `[tokentrimmer: identical to the tool result in message ${ctx.seen.get(hash)}]`;
+      return formats.identicalRef(ctx.seen.get(hash));
     }
     ctx.seen.set(hash, msgIndex);
   }
+  const sent = shrinkUnique(text, ctx, excluded, stale);
+  indexSource(ctx, sent, msgIndex, k);
+  return sent;
+}
+
+function shrinkUnique(text, ctx, excluded, stale) {
   if (excluded) {
     // File content stays verbatim (edit tools match it exactly), and so can be referenced later.
     ctx.skipped++;
-    indexSource(ctx, text, msgIndex, k);
     return text;
   }
   const r = compressText(text, (stale && staleOptions(ctx.opts)) || ctx.opts);
-  const blocks = dedupeBlocks(text, ctx);
+  // References can replace lines of the raw text or of its compressed form; keep the shortest.
+  // Never when the original already has lines that look like references: they would be ambiguous.
+  const canRef = !formats.hasBlockRefs(text);
+  let blocks = canRef ? dedupeBlocks(text, ctx) : null;
+  let onCompressed = false;
+  if (canRef && r.techniques.length) {
+    const b2 = dedupeBlocks(r.text, ctx);
+    if (b2 !== null && (blocks === null || b2.length < blocks.length)) [blocks, onCompressed] = [b2, true];
+  }
   if (blocks !== null && blocks.length < r.text.length) {
-    note(ctx, ['dedupe-block']);
+    note(ctx, onCompressed ? [...r.techniques, 'dedupe-block'] : ['dedupe-block']);
     ctx.fieldsChanged++;
+    if (onCompressed && ctx.opts.retrieve && r.techniques.some((t) => LOSSY.has(t))) {
+      const id = formats.retrieveId(text);
+      ctx.store.set(id, text);
+      note(ctx, ['retrievable']);
+      return blocks + formats.retrieveNote(id);
+    }
     return blocks;
   }
   if (r.techniques.length) {
     note(ctx, r.techniques);
     ctx.fieldsChanged++;
-  } else {
-    indexSource(ctx, text, msgIndex, k);
   }
   if (ctx.opts.retrieve && r.techniques.some((t) => LOSSY.has(t))) {
     // Content was dropped: keep the original for the retrieval tool and tell the model how to get it.
