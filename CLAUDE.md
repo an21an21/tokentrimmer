@@ -25,6 +25,7 @@ Real-session benchmark (the one that matters; synthetic payloads overstate savin
 ```bash
 python3 compare/real/extract.py            # ~/.claude/projects sessions -> compare/real/out/cases.json (local, git-ignored)
 node compare/real/run_tokentrimmer.js         # each config: output, timing, determinism, verifier verdict, cache replay
+node compare/real/cache_split.js           # safe mode savings per session next to its cache hit rate
 <venv>/bin/python compare/real/run_headroom.py   # Headroom profiles + o200k tokens + cache replay -> out/report.md (--no-replay is fast)
 ```
 

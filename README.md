@@ -365,6 +365,29 @@ Cache-weighted cost replays each session request by request, priced as prompt ca
 shared with the previous request, 1.25x for the rest). Rewriting old messages re-bills everything after them, which is
 why stale mode's saving roughly halves there.
 
+Safe mode's cost saving does not depend on the cache hit rate. A tool result's compressed form is fixed from the
+turn it first appears, so the smaller form is what is written to the cache and read on every later turn: it saves
+on the write and on each read, and cost falls in step with the tokens sent across the session. Per session, safe
+mode (`node compare/real/cache_split.js`; characters, not tokens, so the totals differ slightly from the table above):
+
+| Session | Cache hit rate | Final request | All requests | Cost with caching |
+|---|---:|---:|---:|---:|
+| 1 | 99% | 22.4% | 18.6% | 19.0% |
+| 2 | 99% | 2.3% | 2.0% | 2.0% |
+| 3 | 96% | 11.2% | 5.9% | 7.5% |
+| 4 | 99% | 3.8% | 3.3% | 3.3% |
+| 5 | 99% | 2.5% | 2.2% | 2.3% |
+| 6 | 99% | 0.7% | 1.0% | 0.9% |
+| 7 | 94% | 0.7% | 0.8% | 0.8% |
+| 8 | 87% | 0.0% | 0.0% | 0.0% |
+| 9 | 99% | 0.0% | 0.0% | 0.0% |
+| all | 99% | 6.3% | 5.1% | 5.3% |
+
+These sessions are almost all cache reads, and the saving still ranges from 0% to 19%: the content decides it.
+The final request saves more than the session as a whole because repeated output piles up as a session grows.
+The replay assumes the cache never expires; with a 5-minute TTL and idle gaps, more of each request is a cache
+write, which is not modelled here.
+
 Accuracy: 140 questions over 8 of the sessions, each quoting a line from an old tool result and asking for the line
 after it (exact match), answered by Claude Opus 5.5 through `claude -p` with each compressed conversation. Safe mode
 was measured on the current version; the other TokenTrimmer rows on v0.1.1, which used fewer, longer references:
